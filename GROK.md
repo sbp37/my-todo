@@ -7,6 +7,7 @@
 - 사이트: `https://subin-assistant.vercel.app`
 - Vercel 프로젝트: `subin-assistant`
 - GitHub 저장소: `sbp37/my-todo`
+- 사이트 소스 폴더: `subin-assistant-site/`
 - 기본 브랜치: `main`
 - 업무 데이터: Supabase 프로젝트 `subin-assistant`
 - Supabase project ref: `ctthdtsbjjqovtmhrzzj`
@@ -98,7 +99,7 @@
 
 ## 사이트 UI/기능 수정
 
-사용자가 화면, 달력, 탭, 버튼, 정렬, 디자인, 동작 수정을 요청하면 먼저 현재 라이브 사이트와 저장소 코드를 확인하고 기존 디자인과 정상 기능을 유지한 채 요청 부분만 바꾼다.
+현재 라이브 코드의 기준 사본은 `subin-assistant-site/`의 `index.html`, `style.css`, `app-base.js`, `app-render.js`다. 사용자가 화면, 달력, 탭, 버튼, 정렬, 디자인, 동작 수정을 요청하면 이 폴더와 현재 라이브 사이트를 먼저 확인하고 기존 디자인과 정상 기능을 유지한 채 요청 부분만 바꾼다. 저장소 루트의 오래된 `index.html`로 사이트를 교체하지 않는다.
 
 현재 사이트는 Supabase 공용 API를 읽으며 완료 체크, 날짜 변경, 오늘 하기, 순서 변경도 DB에 저장한다. 민감한 데이터나 API secret을 코드에 하드코딩하지 않는다.
 
