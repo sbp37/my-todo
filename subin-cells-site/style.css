@@ -141,13 +141,17 @@ dialog input{width:100%;min-width:0;padding:9px 10px;border:1px solid #2c2950;bo
 
 /* ===== 반응형 ===== */
 @media(max-width:980px){
-  .shell{grid-template-columns:150px minmax(0,1fr);grid-template-rows:minmax(0,1fr) auto;height:100dvh}
-  .side{grid-column:1;grid-row:1}
-  .mid{grid-column:2;grid-row:1;min-height:0}
-  .detail{grid-column:1/-1;grid-row:2;border-left:0;border-top:1px solid var(--line);max-height:42dvh;overflow-y:auto}
+  .shell{grid-template-columns:150px minmax(0,1fr) 268px;height:100dvh}
+  .mid{min-height:0}
+  .head{padding:10px 14px 8px}
+  .head h1{font-size:17px}
+  .head .sub{font-size:11px;margin:2px 0 8px}
+  .hstats{flex-wrap:wrap;gap:12px}
+  .hstat b{font-size:13px}
   .toolbar{overflow-x:auto;scrollbar-width:none}
   .tb{white-space:nowrap}
-  .hstats{flex-wrap:wrap;gap:14px}
+  .detail{padding:12px}
+  .cmd{padding:8px 10px 10px}
 }
 @media(max-width:640px){
   .shell{display:flex;flex-direction:column;height:auto;min-height:100dvh}
