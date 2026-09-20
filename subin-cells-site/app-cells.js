@@ -1,5 +1,8 @@
 "use strict";
 /* ===== 픽셀 세포 지도 엔진 (SecondBrain OS 스타일) ===== */
+/* 가구 에셋 자료: kArchive · 출처: 쓰레드 dogfooter (개인·상업 사용 가능, 출처 표기 조건) */
+const SPR={};['desk','chair','chair2','sofa','shelf','plants','cactus','cabinet','coffeetable','armchair','mtable','divider','vending','dining','bunk'].forEach(n=>{const i=new Image();i.src='assets/props/'+n+'.png';i.onload=()=>drawPlan();SPR[n]=i});
+function spr(c,name,bx,by,h){const im=SPR[name];if(!im||!im.naturalWidth)return;const w=im.naturalWidth*h/im.naturalHeight;c.drawImage(im,Math.round(bx),Math.round(by-h),w,h)}
 const COLS=4,WALL=8,RIW=144,RIH=86,CELL_W=RIW+WALL*2,CELL_H=RIH+WALL*2,CORR=42,PAD=14,TICK=20,WALK=16,BAND=16;
 const px=(c,x,y,w,h,col)=>{c.fillStyle=col;c.fillRect(x|0,y|0,w,h)};
 const hash=s=>{let h=0;for(const ch of String(s))h=(h*31+ch.charCodeAt(0))|0;return Math.abs(h)};
@@ -64,26 +67,29 @@ function drawRoomCell(c,r,t){const state=roomState(t),h=hash(t.id),tk=animFrame(
   /* 명패 — 방 위쪽 벽을 가로지르는 탭 */
   const name=t.title.slice(0,8);c.font=fnt(8,'bold');const pw=Math.min(RIW-10,Math.round(c.measureText(name).width)+12);
   px(c,ix+4,iy-4,pw+2,15,OUTLINE);px(c,ix+5,iy-3,pw,13,plate);c.fillStyle='#fff';c.textBaseline='middle';c.fillText(name,ix+11,iy+4);
+  const fy=iy+RIH-2;
   if(lit){const v=h%4;
-    drawRug(c,ix+RIW-78,iy+RIH-12,52);
-    if(v===0)drawWindow(c,ix+RIW-30,iy+6,frame);else if(v===1)drawPoster(c,ix+RIW-26,iy+8);else if(v===2)drawBoard(c,ix+RIW-46,iy+7,frame);else drawShelf(c,ix+RIW-34,iy+18);
-    if(v===0){drawBed(c,ix+6,iy+RIH-30);drawPlant(c,ix+46,iy+RIH-20)}
-    else if(v===1){drawSofa(c,ix+6,iy+RIH-26);drawPlant(c,ix+42,iy+RIH-20)}
-    else if(v===2){drawServer(c,ix+8,iy+RIH-46,frame);drawBoxes(c,ix+30,iy+RIH-22)}
-    else{drawPlant(c,ix+8,iy+RIH-20);drawBoxes(c,ix+30,iy+RIH-22);drawPoster(c,ix+RIW-26,iy+8)}
-    if(h%3!==1)drawShelf(c,ix+6,iy+16);
-    drawDesk(c,ix+RIW-58,iy+RIH-26,state,frame);
+    drawRug(c,ix+RIW-92,fy-12,56);
+    /* 벽 장식 */
+    if(v===0)drawWindow(c,ix+RIW-32,iy+8,frame);else if(v===1)drawPoster(c,ix+RIW-26,iy+10);else if(v===2)drawBoard(c,ix+RIW-48,iy+10,frame);else drawShelf(c,ix+RIW-36,iy+24);
+    /* 가구 스프라이트 */
+    if(v===0){spr(c,'shelf',ix+4,fy,48);spr(c,'cactus',ix+62,fy,28)}
+    else if(v===1){spr(c,'sofa',ix+2,fy,32);spr(c,'coffeetable',ix+38,fy,20);spr(c,'plants',ix+72,fy,34)}
+    else if(v===2){spr(c,'vending',ix+4,fy,46);spr(c,'cabinet',ix+40,fy,26);spr(c,'cactus',ix+72,fy,24)}
+    else{spr(c,'dining',ix+4,fy,32);spr(c,'armchair',ix+48,fy,34)}
+    spr(c,'desk',ix+RIW-70,fy,44);spr(c,'chair',ix+RIW-88,fy,28);
+    /* 책상 모니터 상태 표시 */
+    if(state==='type'||state==='panic'){px(c,ix+RIW-54,fy-34,12,9,OUTLINE);px(c,ix+RIW-52,fy-32,8,5,frame?'#bfe9ff':'#8fd4f5')}
     const hair=HAIRS[h%HAIRS.length],shirt=SHIRTS[t.category]||SHIRTS.main;
     const poses={type:'type',panic:'panic',coffee:'sip',wait:'stand',sleep:'sleep'};
     const pose=poses[state];
-    if(pose!=='stand'){px(c,ix+RIW-72,iy+RIH-26,10,3,'#5f4732');px(c,ix+RIW-70,iy+RIH-23,3,9,'#4a382a');px(c,ix+RIW-64,iy+RIH-23,3,9,'#4a382a')}
-    const cx=pose==='wait'?ix+20:ix+RIW-72,cy=pose==='wait'?iy+RIH-40:iy+RIH-46;
+    const cx=pose==='wait'?ix+18:ix+RIW-82,cy=pose==='wait'?fy-40:fy-44;
     drawMiniTag(c,cx-6,cy-16,{type:'작업',panic:'긴급',coffee:'휴식',wait:'대기'}[state]||'대기');
     drawChar(c,cx,cy,{hair,shirt,pose,frame,blink});
-    if(state==='panic'){drawBubbleIcon(c,ix+RIW-84,iy+18,'panic',frame);if(frame){c.fillStyle='rgba(208,80,80,.15)';c.fillRect(ix,iy,RIW,RIH)}}
-    if(state==='wait')drawBubbleIcon(c,ix+24,iy+20,'wait',frame);
+    if(state==='panic'){drawBubbleIcon(c,ix+RIW-86,iy+20,'panic',frame);if(frame){c.fillStyle='rgba(208,80,80,.15)';c.fillRect(ix,iy,RIW,RIH)}}
+    if(state==='wait')drawBubbleIcon(c,ix+24,iy+22,'wait',frame);
     drawLamp(c,ix+RIW/2-4,iy+4,lit&&state!=='coffee')}
-  else{drawChar(c,ix+RIW/2-6,iy+RIH-40,{hair:HAIRS[h%HAIRS.length],shirt:'#5a5468',pose:'sleep',frame,blink:true});drawBubbleIcon(c,ix+RIW/2-16,iy+16,'sleep',frame);c.fillStyle='rgba(16,12,32,.4)';c.fillRect(ix,iy,RIW,RIH)}
+  else{spr(c,'bunk',ix+36,fy,54);drawChar(c,ix+16,iy+RIH-40,{hair:HAIRS[h%HAIRS.length],shirt:'#5a5468',pose:'sleep',frame,blink:true});drawBubbleIcon(c,ix+RIW-16,iy+16,'sleep',frame);c.fillStyle='rgba(16,12,32,.45)';c.fillRect(ix,iy,RIW,RIH)}
   if(local.selected===t.id){px(c,x-2,y-2,CELL_W+4,2,'#e8d54b');px(c,x-2,y+CELL_H,CELL_W+4,2,'#e8d54b');px(c,x-2,y,2,CELL_H,'#e8d54b');px(c,x+CELL_W,y,2,CELL_H,'#e8d54b')}}
 function drawGhost(c,r){const x=r.x,y=r.y;px(c,x+2,y+2,CELL_W-4,CELL_H-4,'rgba(143,111,82,.14)');px(c,x+WALL,y+WALL,RIW,RIH,'rgba(0,0,0,.12)');c.strokeStyle='rgba(180,160,120,.35)';c.setLineDash([4,4]);c.strokeRect(x+3.5,y+3.5,CELL_W-7,CELL_H-7);c.setLineDash([]);c.fillStyle='rgba(200,190,220,.35)';c.font=fnt(8);c.textBaseline='middle';c.fillText('빈 세포',x+WALL+6,y+CELL_H-14)}
 function drawTalkBubble(c,rects,rooms){const hot=hottest(rooms.filter(t=>!isDone(t)));if(!hot)return;const i=rooms.indexOf(hot),r=rects[i];if(!r)return;
