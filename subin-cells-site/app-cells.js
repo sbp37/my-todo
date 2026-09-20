@@ -1,6 +1,6 @@
 "use strict";
 /* ===== 픽셀 세포 지도 엔진 (SecondBrain OS 스타일) ===== */
-const COLS=4,WALL=8,RIW=144,RIH=86,CELL_W=RIW+WALL*2,CELL_H=RIH+WALL*2,CORR=42,PAD=14,TICK=20,WALK=16,BAND=16;
+const COLS=4,WALL=8,RIW=144,RIH=86,CELL_W=RIW+WALL*2,CELL_H=RIH+WALL*2,CORR=42,PAD=14,TICK=20,WALK=16,BAND=16,DSCALE=2;let lastW=800;
 const px=(c,x,y,w,h,col)=>{c.fillStyle=col;c.fillRect(x|0,y|0,w,h)};
 const hash=s=>{let h=0;for(const ch of String(s))h=(h*31+ch.charCodeAt(0))|0;return Math.abs(h)};
 const OUTLINE='#241d30';
@@ -37,11 +37,11 @@ function drawPoster(c,x,y){px(c,x,y,14,15,'#f5ecd8');px(c,x+2,y+2,10,7,'#d8806a'
 function drawServer(c,x,y,frame){px(c,x,y,16,26,'#3a3450');px(c,x+2,y+2,12,6,'#262240');px(c,x+2,y+10,12,6,'#262240');px(c,x+3,y+4,2,2,frame?'#7fe8a0':'#3a7a50');px(c,x+3,y+12,2,2,frame?'#e8c878':'#7a6a40');px(c,x+2,y+18,12,5,'#262240')}
 function drawBoard(c,x,y,frame){px(c,x,y,30,20,OUTLINE);px(c,x+2,y+2,26,16,'#d8e4dc');c.fillStyle='#5a6a62';for(let i=0;i<3;i++)px(c,x+4,y+5+i*5,14+((i*7+frame*3)%9),1,'#5a6a62');px(c,x+22,y+5,4,4,'#c95a4a')}
 function drawSofa(c,x,y){px(c,x,y+6,30,10,'#7a5a48');px(c,x,y,5,8,'#8a6a58');px(c,x+25,y,5,8,'#8a6a58');px(c,x+2,y+2,26,5,'#8a6a58')}
-function drawLamp(c,x,y,on){px(c,x+4,0,1,y,'#4a4030');px(c,x,y,9,4,'#5a5040');px(c,x+2,y+4,5,2,on?'#ffe9a8':'#8a8070');if(on){c.fillStyle='#ffe9a8';c.globalAlpha=.12;c.beginPath();c.moveTo(x+2,y+6);c.lineTo(x+7,y+6);c.lineTo(x+16,y+50);c.lineTo(x-7,y+50);c.closePath();c.fill();c.globalAlpha=1}}
+function drawLamp(c,x,yTop,y,on){px(c,x+4,yTop,1,y-yTop,'#4a4030');px(c,x,y,9,4,'#5a5040');px(c,x+2,y+4,5,2,on?'#ffe9a8':'#8a8070');if(on){c.fillStyle='#ffe9a8';c.globalAlpha=.12;c.beginPath();c.moveTo(x+2,y+6);c.lineTo(x+7,y+6);c.lineTo(x+16,y+50);c.lineTo(x-7,y+50);c.closePath();c.fill();c.globalAlpha=1}}
 function drawBed(c,x,y){px(c,x,y+9,34,10,'#7a4f3e');px(c,x,y+5,34,4,'#96604a');px(c,x+2,y+6,9,5,'#e8e4d8');px(c,x+2,y+15,3,4,'#4f3a2c');px(c,x+29,y+15,3,4,'#4f3a2c')}
 function drawRug(c,x,y,w){px(c,x,y,w,7,'#a9705a');px(c,x+3,y+2,w-6,3,'#c08a68')}
 function drawBoxes(c,x,y){px(c,x,y+8,12,10,'#b08a5a');px(c,x+13,y+11,10,7,'#9a7448');px(c,x+2,y+10,8,1,'#8a6a42')}
-function drawMiniTag(c,x,y,txt){c.font=fnt(7);const w=Math.round(c.measureText(txt).width)+10;px(c,x-1,y-1,w+2,12,OUTLINE);px(c,x,y,w,10,'#f5f2ea');c.fillStyle='#241d30';c.textBaseline='middle';c.fillText(txt,x+5,y+6)}
+function drawMiniTag(c,x,y,txt){c.font=fnt(8);const w=Math.round(c.measureText(txt).width)+10;px(c,x-1,y-1,w+2,13,OUTLINE);px(c,x,y,w,11,'#f5f2ea');c.fillStyle='#241d30';c.textBaseline='middle';c.fillText(txt,x+5,y+6)}
 /* ----- 캐릭터 ----- */
 function drawHair(c,x,yy,hs,hair,band){if(hs===0){px(c,x+2,yy,8,2,hair);px(c,x+1,yy+2,10,1,hair)}
   else if(hs===1){px(c,x+2,yy,8,2,hair);px(c,x+1,yy+2,10,1,hair);px(c,x+1,yy+3,2,8,hair);px(c,x+9,yy+3,2,8,hair)}
@@ -80,8 +80,8 @@ function drawRoomCell(c,r,t){const state=roomState(t),h=hash(t.id),tk=animFrame(
   px(c,ix,iy,RIW,3,lit?'#6b4f42':'#312842');for(let i=4;i<RIW-4;i+=10)px(c,ix+i,iy+3,5,2,lit?'#6b4f42':'#312842');
   if(lit){px(c,ix,iy+RIH-10,RIW,10,'#d8c9a8');px(c,ix,iy+RIH-10,RIW,1,'rgba(0,0,0,.15)')}
   /* 명패 — 방 위쪽 벽을 가로지르는 탭 */
-  const name=t.title.slice(0,8);c.font=fnt(8,'bold');const pw=Math.min(RIW-10,Math.round(c.measureText(name).width)+12);
-  px(c,ix+4,iy-4,pw+2,15,OUTLINE);px(c,ix+5,iy-3,pw,13,plate);c.fillStyle='#fff';c.textBaseline='middle';c.fillText(name,ix+11,iy+4);
+  const name=t.title.slice(0,10);c.font=fnt(9,'bold');const pw=Math.min(RIW-10,Math.round(c.measureText(name).width)+12);
+  px(c,ix+4,iy-5,pw+2,16,OUTLINE);px(c,ix+5,iy-4,pw,14,plate);c.fillStyle='#fff';c.textBaseline='middle';c.fillText(name,ix+11,iy+4);
   const fy=iy+RIH-2,lk=look(t.id);
   if(lit){const v=h%6;
     drawRug(c,ix+RIW-92,fy-12,56);
@@ -105,17 +105,17 @@ function drawRoomCell(c,r,t){const state=roomState(t),h=hash(t.id),tk=animFrame(
     drawChar(c,cx,cy,{hair:lk.hair,shirt,pose,frame,blink,skin:lk.skin,hs:lk.hs,band:lk.band,glasses:lk.glasses});
     if(state==='panic'){drawBubbleIcon(c,ix+RIW-86,iy+20,'panic',frame);if(frame){c.fillStyle='rgba(208,80,80,.15)';c.fillRect(ix,iy,RIW,RIH)}}
     if(state==='wait')drawBubbleIcon(c,ix+24,iy+22,'wait',frame);
-    drawLamp(c,ix+RIW/2-4,iy+4,lit&&state!=='coffee')}
+    drawLamp(c,ix+RIW/2-4,iy+1,iy+7,lit&&state!=='coffee')}
   else{drawBed(c,ix+30,fy-34);drawChar(c,ix+14,iy+RIH-40,{hair:lk.hair,shirt:'#5a5468',pose:'sleep',frame,blink:true,skin:lk.skin,hs:lk.hs,band:lk.band});drawBubbleIcon(c,ix+RIW-16,iy+16,'sleep',frame);c.fillStyle='rgba(16,12,32,.45)';c.fillRect(ix,iy,RIW,RIH)}
   if(local.selected===t.id){px(c,x-2,y-2,CELL_W+4,2,'#e8d54b');px(c,x-2,y+CELL_H,CELL_W+4,2,'#e8d54b');px(c,x-2,y,2,CELL_H,'#e8d54b');px(c,x+CELL_W,y,2,CELL_H,'#e8d54b')}}
 function drawGhost(c,r){const x=r.x,y=r.y;px(c,x+2,y+2,CELL_W-4,CELL_H-4,'rgba(143,111,82,.14)');px(c,x+WALL,y+WALL,RIW,RIH,'rgba(0,0,0,.12)');c.strokeStyle='rgba(180,160,120,.35)';c.setLineDash([4,4]);c.strokeRect(x+3.5,y+3.5,CELL_W-7,CELL_H-7);c.setLineDash([]);c.fillStyle='rgba(200,190,220,.35)';c.font=fnt(8);c.textBaseline='middle';c.fillText('빈 세포',x+WALL+6,y+CELL_H-14)}
 function drawTalkBubble(c,rects,rooms){const hot=hottest(rooms.filter(t=>!isDone(t)));if(!hot)return;const i=rooms.indexOf(hot),r=rects[i];if(!r)return;
   const txt=hot.nextAction?`"${hot.nextAction}"부터 할게요.`:`"${hot.title}" 먼저 끝내볼게요.`;const t=txt.length>24?txt.slice(0,23)+'…':txt;
-  c.font=fnt(8);const bw=Math.round(c.measureText(t).width)+14,bh=16,bx=Math.max(4,Math.min(r.x+r.w/2-bw/2,800-bw)),by=r.y-2;
+  c.font=fnt(9);const bw=Math.round(c.measureText(t).width)+14,bh=16,bx=Math.max(4,Math.min(r.x+r.w/2-bw/2,800-bw)),by=r.y-2;
   px(c,bx-1,by-1,bw+2,bh+2,OUTLINE);px(c,bx,by,bw,bh,'#f7f2e4');px(c,bx+bw/2-3,by+bh,6,4,'#f7f2e4');px(c,bx+bw/2-1,by+bh+4,2,2,'#f7f2e4');
   c.fillStyle='#241d30';c.textBaseline='middle';c.fillText(t,bx+7,by+bh/2+1)}
 /* ----- 복도 / 로비 / 티커 ----- */
-function corridorPlate(c,x,y,w,txt){px(c,x,y,w,16,'#14132a');px(c,x,y,w,1,'#3a3450');c.fillStyle='#c8c2d8';c.font=fnt(8,'bold');c.textBaseline='middle';c.fillText(txt,x+7,y+9)}
+function corridorPlate(c,x,y,w,txt){px(c,x,y,w,17,'#14132a');px(c,x,y,w,1,'#3a3450');c.fillStyle='#c8c2d8';c.font=fnt(9,'bold');c.textBaseline='middle';c.fillText(txt,x+7,y+9)}
 function corridorWalk(c,y,W,h){px(c,0,y,W,h,'#96684c');px(c,0,y,W,2,'#6f4c38');px(c,0,y+h-2,W,2,'#6f4c38');
   for(let col=0;col<=COLS;col++){const p=PAD+col*CELL_W-5;px(c,p,y-2,10,h+4,'#7d5a42');px(c,p+1,y-2,8,h+4,'#8f6a50');px(c,p+3,y+3,4,4,'#c9a13a')}
   for(let i=60;i<W-50;i+=90){px(c,i,y+4,6,3,'#54402e');px(c,i+1,y+1,4,3,'#e8c878')}}
@@ -125,15 +125,15 @@ function drawCorridor(c,y,W,n,act){corridorWalk(c,y,W,CORR);
   const rt=`DAY ${doy} — ${tm}`;corridorPlate(c,W-PAD-6-Math.round(c.measureText(rt).width)-14,y+13,Math.round(c.measureText(rt).width)+14,rt)}
 function drawRunner(c,y,W){const tk=animFrame(),span=W-60,pos=(tk*7)%(span*2),x=30+(pos>span?span*2-pos:pos);drawChar(c,x,y+CORR-24,{hair:'#1d1b20',shirt:'#7fb8d8',pose:'walk',frame:tk%2===0,blink:false,skin:'#e8b088',hs:4,band:'#3a5a8c'})}
 function drawTicker(c,y,W,rooms){px(c,0,y,W,TICK,'#0f0e20');px(c,0,y,W,1,'#2a2848');const act=rooms.filter(t=>!isDone(t)).length,sleep=rooms.length-act;
-  c.fillStyle='#5a5478';c.font=fnt(7);c.textBaseline='middle';c.fillText(`팀 메이트는 ${act}개 방 가동 · ${sleep}개 방 수면 중 · 메인 채널 20:00 전까지 리포트`,PAD,y+TICK/2+1)}
-function drawPlan(){const cv=document.getElementById('plan');if(!cv)return;const rooms=planRooms(),lay=computeLayout(rooms.length);cv.width=lay.W;cv.height=lay.H;
+  c.fillStyle='#5a5478';c.font=fnt(8);c.textBaseline='middle';c.fillText(`팀 메이트는 ${act}개 방 가동 · ${sleep}개 방 수면 중 · 메인 채널 20:00 전까지 리포트`,PAD,y+TICK/2+1)}
+function drawPlan(){const cv=document.getElementById('plan');if(!cv)return;const rooms=planRooms(),lay=computeLayout(rooms.length);lastW=lay.W;cv.width=lay.W*DSCALE;cv.height=lay.H*DSCALE;
   const z=local.zoom||fitZoom(lay.W);cv.style.width=Math.round(lay.W*z)+'px';
-  const c=cv.getContext('2d');px(c,0,0,lay.W,lay.H,'#0d0c18');
+  const c=cv.getContext('2d');c.setTransform(DSCALE,0,0,DSCALE,0,0);px(c,0,0,lay.W,lay.H,'#0d0c18');
   corridorWalk(c,PAD,lay.W,WALK);
   corridorWalk(c,lay.H-PAD-TICK-BAND,lay.W,BAND);
   lay.rects.forEach(r=>{if(r.row>0&&r.idx%COLS===0)drawCorridor(c,r.y-CORR,lay.W,rooms.length,rooms.filter(t=>!isDone(t)).length)});
   planRects=[];
-  lay.rects.forEach((r,i)=>{const t=rooms[i];if(t){drawRoomCell(c,r,t);planRects.push({x:r.x,y:r.y,w:r.w,h:r.h,id:t.id})}else drawGhost(c,r)});
+  lay.rects.forEach((r,i)=>{const t=rooms[i];if(t){drawRoomCell(c,r,t);planRects.push({x:r.x*DSCALE,y:r.y*DSCALE,w:r.w*DSCALE,h:r.h*DSCALE,id:t.id})}else drawGhost(c,r)});
   for(let rr=1;rr<lay.rows;rr++){const r0=lay.rects[rr*COLS];if(r0)drawRunner(c,r0.y-CORR,lay.W)}
   if(remoteReady)drawTalkBubble(c,lay.rects,rooms);
   drawTicker(c,lay.H-TICK-PAD+2,lay.W,rooms)}
@@ -177,8 +177,8 @@ document.getElementById('tb-font').onclick=e=>{local.mono=!local.mono;save();e.t
 document.getElementById('tb-font').classList.toggle('on',!!local.mono);
 document.getElementById('tb-big').onclick=e=>{local.fscale=local.fscale>=1.5?1:local.fscale+.25;save();e.target.classList.toggle('on',local.fscale>1);drawPlan()};
 document.getElementById('tb-big').classList.toggle('on',(local.fscale||1)>1);
-document.getElementById('tb-zin').onclick=()=>{local.zoom=Math.min(2.5,(local.zoom||fitZoom(document.getElementById('plan').width||800))+.2);save();drawPlan()};
-document.getElementById('tb-zout').onclick=()=>{local.zoom=Math.max(.4,(local.zoom||1)-.2);save();drawPlan()};
+document.getElementById('tb-zin').onclick=()=>{local.zoom=Math.min(2.5,(local.zoom||fitZoom(lastW))+.2);save();drawPlan()};
+document.getElementById('tb-zout').onclick=()=>{local.zoom=Math.max(.4,(local.zoom||fitZoom(lastW)*.8)-.2);save();drawPlan()};
 document.getElementById('tb-fit').onclick=()=>{local.zoom=0;save();drawPlan()};
 document.getElementById('tb-follow').onclick=e=>{local.follow=!local.follow;save();e.target.classList.toggle('on',local.follow)};
 document.getElementById('tb-follow').classList.toggle('on',!!local.follow);
