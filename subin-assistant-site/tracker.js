@@ -12,10 +12,10 @@ const TR={
   data:{seasons:[],concepts:[],groups:[],items:[],sessions:[],days:[]},
   thumbs:{},loaded:false,offline:false,pending:0,
   open:false,view:"today",seasonId:"",conceptTab:"all",skip:0,oneOnly:false,detail:null,progress:"",
-  zoom:2,collapsed:{},galleryMode:"diff",selecting:false,selected:new Set()
+  zoom:2,collapsed:{},selecting:false,selected:new Set()
 };
 try{Object.assign(TR,JSON.parse(localStorage.getItem(UI_KEY)||"{}"))}catch(e){}
-const saveUI=()=>{try{localStorage.setItem(UI_KEY,JSON.stringify({view:TR.view,seasonId:TR.seasonId,conceptTab:TR.conceptTab,oneOnly:TR.oneOnly,zoom:TR.zoom,collapsed:TR.collapsed,galleryMode:TR.galleryMode}))}catch(e){}};
+const saveUI=()=>{try{localStorage.setItem(UI_KEY,JSON.stringify({view:TR.view,seasonId:TR.seasonId,conceptTab:TR.conceptTab,oneOnly:TR.oneOnly,zoom:TR.zoom,collapsed:TR.collapsed}))}catch(e){}};
 
 /* ---------- 날짜 ---------- */
 const D={
@@ -276,7 +276,8 @@ function detectForm(src){
   if(band>=2&&band<=maxBand)found=true;
   return {hasForm:found,score:Math.round(best*1000)/1000};
 }
-const slug=s=>String(s||"").trim().replace(/\s+/g,"").toUpperCase();
+const nfc=s=>String(s||"").normalize("NFC");
+const slug=s=>nfc(s).trim().replace(/\s+/g,"").toUpperCase();
 function parseName(name){
   const base=name.replace(/\.[^.]+$/,"").replace(/\s*\(\d+\)$/,"").replace(/\s+copy$/i,"").trim();
   const parts=base.split(/_+/).filter(Boolean);
@@ -327,13 +328,15 @@ async function importFiles(files){
   for(let n=0;n<files.length;n++){
     const f=files[n];TR.progress=`${n+1}/${files.length} · ${f.name}`;render();
     try{
-      const p=parseName(f.name);
+      const p=parseName(nfc(f.name));
       s=await seasonForFile(p.season,s);
       if(!s){toast("먼저 시즌을 만들어 주세요.");break}
       if(TR.seasonId!==s.id){TR.seasonId=s.id;saveUI()}
       // 같은 시즌에 같은 품목 코드가 있으면 그 카드를 새 버전으로 갱신 (컨셉이 바뀌어도 중복 생성 안 함)
-      const prev=byId("items",`${s.id}_${p.concept}_${p.code}`)||itemsOf(s.id).find(i=>i.code===p.code);
-      const dir=folderOf(f),cname=dir||p.concept,cid=`${s.id}:${slug(cname)}`;
+      const prev=byId("items",`${s.id}_${p.concept}_${p.code}`)||itemsOf(s.id).find(i=>nfc(i.code)===p.code);
+      // 맥 폴더 이름은 한글이 풀어쓴 형태(NFD)로 와서, 합친 형태(NFC)로 맞춰 비교한다 (예전에 만든 컨셉도 같은 걸로 찾음)
+      const dir=nfc(folderOf(f)),cname=dir||p.concept,cid0=`${s.id}:${slug(cname)}`;
+      const cid=TR.data.concepts.find(c=>c.season_id===s.id&&nfc(c.id)===cid0)?.id||cid0;
       const conceptId=dir||!prev?cid:prev.concept_id,rows={concepts:[],items:[]};
       if(conceptId===cid&&!byId("concepts",cid))rows.concepts.push({id:cid,season_id:s.id,name:cname,target:null,sort:100});
       if(prev&&prev.concept_id!==conceptId)left.add(prev.concept_id);
@@ -378,16 +381,21 @@ async function filesFromDrop(dt){
   return out;
 }
 
-/* ---------- 갤러리 정렬 (끌어서 옮기기 · 비슷한 것끼리) ---------- */
+/* ---------- 갤러리 정렬 (끌어서 옮기기 · 묶음 · 비슷한 것끼리) ---------- */
 const SORTABLE_JS="https://cdnjs.cloudflare.com/ajax/libs/Sortable/1.15.2/Sortable.min.js";
 let sortableP=null,sortables=[];
 function loadSortable(){return sortableP??=new Promise((res,rej)=>{const sc=document.createElement("script");sc.src=SORTABLE_JS;sc.onload=()=>res(window.Sortable);sc.onerror=()=>{sortableP=null;rej(new Error("Sortable을 불러오지 못했어요"))};document.head.appendChild(sc)})}
+// 칸(쉬움·중간·어려움·완료) 안에서 카드·묶음 줄을 아무 자리로, 카드는 묶음 줄 안팎으로 옮긴다
 async function bindSortables(){
   sortables.forEach(x=>x.destroy());sortables=[];
-  const lists=[...main.querySelectorAll("[data-list],[data-glist]")];if(!lists.length||TR.selecting)return;
+  const lists=[...main.querySelectorAll("[data-list],[data-blist]")];if(!lists.length||TR.selecting)return;
   let Sortable;try{Sortable=await loadSortable()}catch(e){console.warn(e);return}
   if(!lists[0].isConnected)return;
-  sortables=lists.map(el=>{const byGroup=el.dataset.glist!==undefined;return Sortable.create(el,{group:byGroup?"tr-glist":"tr-gallery",animation:150,delay:220,delayOnTouchOnly:true,touchStartThreshold:5,draggable:".tr-card-item",filter:".tr-statebtn",preventOnFilter:false,ghostClass:"tr-ghost",chosenClass:"tr-chosen",onStart:()=>{TR.dragging=true},onEnd:byGroup?onGroupDrop:onCardDrop})});
+  // forceFallback: 브라우저 기본 드래그 대신 마우스·터치 이벤트로 움직여서 격자 안 자리 이동이 맥·폰에서 똑같이 된다
+  const common={animation:150,delay:220,delayOnTouchOnly:true,touchStartThreshold:5,forceFallback:true,fallbackTolerance:4,fallbackOnBody:true,filter:".tr-statebtn,.tr-bundle-head button",preventOnFilter:false,ghostClass:"tr-ghost",chosenClass:"tr-chosen",fallbackClass:"tr-fallback",swapThreshold:.65,emptyInsertThreshold:12,onStart:()=>{TR.dragging=true},onEnd:onGalleryDrop};
+  sortables=lists.map(el=>el.dataset.blist!==undefined
+    ?Sortable.create(el,{...common,group:{name:"tr-gallery",put:(to,from,drag)=>!drag.classList.contains("tr-bundle")},draggable:".tr-card-item"})
+    :Sortable.create(el,{...common,group:"tr-gallery",draggable:".tr-card-item,.tr-bundle"}));
 }
 // 모든 카드에 서로 다른 sort_order를 매겨 둔다 (처음 끌 때 한 번)
 function normalizeOrder(s){
@@ -396,73 +404,69 @@ function normalizeOrder(s){
   all.forEach((i,n)=>{const v=(n+1)*1024;if(i.sort_order!==v){i.sort_order=v;rows.push(i)}});
   return rows;
 }
-async function onCardDrop(evt){
+const nodeItems=el=>(el.classList.contains("tr-bundle")?[...el.querySelectorAll("[data-item]")].map(x=>x.dataset.item):[el.dataset.item]).map(id=>byId("items",id)).filter(Boolean);
+function edgeOrder(el,side){const v=nodeItems(el).map(i=>i.sort_order);return v.length?(side==="min"?Math.min(...v):Math.max(...v)):null}
+function siblingNode(el,dir){let x=el;do{x=dir<0?x.previousElementSibling:x.nextElementSibling}while(x&&!x.matches(".tr-card-item,.tr-bundle"));return x}
+// lo와 hi 사이에 n개 값을 고르게 (한쪽이 없으면 1024 간격)
+function spread(lo,hi,n){return Array.from({length:n},(_,i)=>lo!=null&&hi!=null?lo+(hi-lo)*(i+1)/(n+1):lo!=null?lo+1024*(i+1):hi!=null?hi-1024*(n-i):1024*(i+1))}
+async function onGalleryDrop(evt){
   TR.dragging=false;
-  const id=evt.item.dataset.item,from=evt.from.dataset.list,to=evt.to.dataset.list,it=byId("items",id),s=season();
-  if(!it||!s||(from===to&&evt.oldIndex===evt.newIndex)){render();return}
-  const changed=new Map(normalizeOrder(s).map(r=>[r.id,r]));
-  // 완료 칸으로 옮기면 완료 처리 (완료 칸은 완료 시각 순이라 위치는 따로 저장하지 않는다)
-  if(to==="done"){if(changed.size)await put({items:[...changed.values()]});if(!isDone(it))await setDone(id,true);else render();return}
-  const ids=[...evt.to.querySelectorAll("[data-item]")].map(x=>x.dataset.item),k=ids.indexOf(id);
-  const prev=byId("items",ids[k-1]),next=byId("items",ids[k+1]);
-  const so=prev&&next?(prev.sort_order+next.sort_order)/2:prev?prev.sort_order+1024:next?next.sort_order-1024:it.sort_order;
-  const row={...it,sort_order:so,difficulty:to};
-  if(from==="done"){row.status="todo";row.completed_at=null;row.confirmed=true}
-  changed.set(id,row);
+  const el=evt.item,s=season(),fromB=evt.from.dataset.blist,toB=evt.to.dataset.blist,isBundle=el.classList.contains("tr-bundle");
+  if(!s||(evt.from===evt.to&&evt.oldIndex===evt.newIndex)){render();return}
+  const changed=new Map(normalizeOrder(s).map(r=>[r.id,r])),moved=nodeItems(el);
+  const section=evt.to.closest("[data-list]")?.dataset.list;
+  // 완료 칸으로 옮기면 (카드든 묶음 줄이든) 완료 처리. 완료 칸은 완료 시각 순이라 위치는 저장하지 않는다
+  if(section==="done"){if(changed.size)await put({items:[...changed.values()]});for(const it of moved)if(!isDone(it))await setDone(it.id,true);render();return}
+  // 새 자리의 앞뒤 이웃 사이로. 묶음 줄 안의 맨 앞/맨 뒤면 묶음 줄 바깥 이웃을 기준으로
+  const prev=siblingNode(el,-1),next=siblingNode(el,1);
+  let lo=prev?edgeOrder(prev,"max"):null,hi=next?edgeOrder(next,"min"):null;
+  if(toB){const b=evt.to.closest(".tr-bundle");if(!prev){const x=siblingNode(b,-1);lo=x?edgeOrder(x,"max"):null}if(!next){const x=siblingNode(b,1);hi=x?edgeOrder(x,"min"):null}}
+  const vals=spread(lo,hi,moved.length);
+  moved.forEach((it,n)=>{
+    const row={...(changed.get(it.id)||it),sort_order:vals[n],difficulty:section};
+    if(!isBundle)row.group_id=toB||null;
+    if(isDone(it)){row.status="todo";row.completed_at=null;row.confirmed=true}
+    changed.set(it.id,row);
+  });
   await put({items:[...changed.values()]});
+  if(fromB&&fromB!==toB)await dissolveSmallGroups([fromB]);
 }
-// 썸네일 특징: 색 분포(흰 배경 제외) + 왼쪽 의뢰서 칸의 밝기 배치
-async function thumbFeatures(it){
-  const blob=await (await fetch(TR.thumbs[it.id],{mode:"cors"})).blob(),im=await createImageBitmap(blob);
-  const w=64,h=Math.max(1,Math.round(im.height*w/im.width)),c=document.createElement("canvas");c.width=w;c.height=h;
-  const ctx=c.getContext("2d",{willReadFrequently:true});ctx.drawImage(im,0,0,w,h);
-  const px=ctx.getImageData(0,0,w,h).data,hist=new Float32Array(64);let n=0;
-  for(let o=0;o<px.length;o+=4){const r=px[o],g=px[o+1],b=px[o+2];if(r>235&&g>235&&b>235)continue;hist[(r>>6)*16+(g>>6)*4+(b>>6)]++;n++}
-  if(n)for(let i=0;i<64;i++)hist[i]/=n;
-  const gw=12,gh=10,g2=document.createElement("canvas");g2.width=gw;g2.height=gh;
-  const x2=g2.getContext("2d",{willReadFrequently:true});x2.drawImage(im,0,0,im.width/2,im.height,0,0,gw,gh);
-  const p2=x2.getImageData(0,0,gw,gh).data,lay=new Float32Array(gw*gh);let mean=0,norm=0;
-  for(let i=0;i<lay.length;i++){lay[i]=(p2[i*4]+p2[i*4+1]+p2[i*4+2])/765;mean+=lay[i]}mean/=lay.length;
-  for(let i=0;i<lay.length;i++){lay[i]-=mean;norm+=lay[i]*lay[i]}norm=Math.sqrt(norm)||1;for(let i=0;i<lay.length;i++)lay[i]/=norm;
-  im.close?.();
-  return {hist,lay};
+function nextGroupName(s){const names=new Set(TR.data.groups.filter(g=>g.season_id===s.id).map(g=>g.name));let n=names.size+1;while(names.has(`묶음 ${n}`))n++;return `묶음 ${n}`}
+// 선택한 카드를 한 묶음으로: 첫 카드 자리·난이도로 모아서 한 줄에
+async function makeGroup(s,ids){
+  const changed=new Map(normalizeOrder(s).map(r=>[r.id,r]));
+  const all=itemsOf(s.id).sort(galleryCmp),picked=all.filter(i=>ids.includes(i.id));if(picked.length<2)return;
+  const first=picked[0],after=all.slice(all.indexOf(first)+1).find(i=>!ids.includes(i.id));
+  const vals=[first.sort_order,...spread(first.sort_order,after?.sort_order??null,picked.length-1)];
+  const now=TR.data.groups.filter(g=>g.season_id===s.id),g={id:crypto.randomUUID(),season_id:s.id,name:nextGroupName(s),sort:Math.max(0,...now.map(x=>x.sort||0))+1};
+  const old=new Set(picked.map(i=>i.group_id).filter(Boolean));
+  picked.forEach((it,n)=>changed.set(it.id,{...(changed.get(it.id)||it),group_id:g.id,sort_order:vals[n],difficulty:isDone(it)?it.difficulty:(first.difficulty||"M")}));
+  await put({groups:[g],items:[...changed.values()]});
+  await dissolveSmallGroups(old);
+  toast(`🔗 ${g.name} · ${picked.length}건을 한 줄로 묶었어요. 이름은 눌러서 바꿀 수 있어요.`,3500);
 }
-function featDist(a,b){let h=0,dot=0;for(let i=0;i<64;i++)h+=Math.abs(a.hist[i]-b.hist[i]);for(let i=0;i<a.lay.length;i++)dot+=a.lay[i]*b.lay[i];return h/2+(1-dot)/2}
-// 난이도 칸마다 비슷한 썸네일이 옆에 오도록 순서를 다시 매긴다 (가까운 것부터 이어 붙이기)
-async function arrangeSimilar(){
-  if(!guardOnline())return;
-  const s=season();if(!s)return;
-  const tab=TR.conceptTab,changed=new Map(normalizeOrder(s).map(r=>[r.id,r]));
-  let moved=0;TR.progress="비슷한 것끼리 정리 중";render();
-  try{
-    for(const [k] of DIFF){
-      const list=itemsOf(s.id).filter(i=>!isDone(i)&&(i.difficulty||"M")===k&&(tab==="all"||i.concept_id===tab)).sort(galleryCmp);
-      const feats=new Map();
-      for(const it of list)if(TR.thumbs[it.id]){try{feats.set(it.id,await thumbFeatures(it))}catch(e){console.warn(e)}}
-      const pool=list.filter(i=>feats.has(i.id));if(pool.length<3)continue;
-      const chain=[pool[0]],rest=new Set(pool.slice(1));
-      while(rest.size){const last=feats.get(chain[chain.length-1].id);let best=null,bd=Infinity;for(const c of rest){const dd=featDist(last,feats.get(c.id));if(dd<bd){bd=dd;best=c}}chain.push(best);rest.delete(best)}
-      const seq=[...chain,...list.filter(i=>!feats.has(i.id))],slots=list.map(i=>i.sort_order).sort((a,b)=>a-b);
-      seq.forEach((it,n)=>{if(it.sort_order!==slots[n]){changed.set(it.id,{...(changed.get(it.id)||it),sort_order:slots[n]});moved++}});
-    }
-  }finally{TR.progress=""}
-  if(changed.size)await put({items:[...changed.values()]});else render();
-  toast(moved?"비슷한 것끼리 옆에 붙였어요. 마음에 안 들면 끌어서 바꿔요.":"바꿀 게 없었어요. 같은 난이도 칸에 썸네일 있는 카드가 3개 이상일 때 정리돼요.",4500);
+// 1건 이하로 줄어든 묶음은 풀어 버린다
+async function dissolveSmallGroups(gids){
+  for(const gid of gids){
+    const g=byId("groups",gid);if(!g)continue;
+    const left=TR.data.items.filter(i=>i.group_id===gid);
+    if(left.length>=2)continue;
+    if(left.length)await put({items:left.map(i=>({...i,group_id:null}))});
+    await remove("groups",gid);
+  }
 }
 
-/* ---------- 묶음: 같은 참고 그림 찾기 ---------- */
+/* ---------- 비슷한 것끼리: 같은 참고 그림 찾기 ---------- */
 // 의뢰서 표 아래쪽 "FG 참고자료" 칸에서 그림 덩어리를 하나씩 잘라 비교한다.
-// 실제 썸네일로 맞춘 기준: 같은 그림 ≤0.034, 다른 그림 ≥0.052 → 0.045
-const REF={x0:.045,x1:.465,y0:.615,y1:.965,w:220,cut:.045};
-const SUG={season:"",busy:false,progress:"",feats:new Map(),memoSig:"",memo:[]};
+// 실제 썸네일로 맞춘 기준: 같은 그림 ≤0.034, 다른 그림 ≥0.052
+const REF={x0:.045,x1:.465,y0:.615,y1:.965,w:220};
+const FEATS=new Map();
 function sampleRect(im,sx,sy,sw,sh,size){
   const c=document.createElement("canvas");c.width=size;c.height=size;
   const ctx=c.getContext("2d",{willReadFrequently:true});ctx.imageSmoothingQuality="high";ctx.drawImage(im,sx,sy,sw,sh,0,0,size,size);
   return ctx.getImageData(0,0,size,size).data;
 }
-async function refBlobs(it){
-  const im=await createImageBitmap(await (await fetch(TR.thumbs[it.id],{mode:"cors"})).blob());
-  try{
+function refBlobsOf(im){
     const W=REF.w,cx=im.width*REF.x0,cy=im.height*REF.y0,cw=im.width*(REF.x1-REF.x0),ch=im.height*(REF.y1-REF.y0),H=Math.max(1,Math.round(ch*W/cw));
     const c=document.createElement("canvas");c.width=W;c.height=H;
     const ctx=c.getContext("2d",{willReadFrequently:true});ctx.imageSmoothingQuality="high";ctx.drawImage(im,cx,cy,cw,ch,0,0,W,H);
@@ -484,68 +488,58 @@ async function refBlobs(it){
       for(let i=0;i<hp.length;i+=4)if(!(hp[i]>235&&hp[i+1]>235&&hp[i+2]>235))keep++;
       for(let i=0;i<hp.length;i+=4){if(keep>20&&hp[i]>235&&hp[i+1]>235&&hp[i+2]>235)continue;hist[(hp[i]>>6)*16+(hp[i+1]>>6)*4+(hp[i+2]>>6)]++}
       const tot=hist.reduce((a,v)=>a+v,0)||1;for(let i=0;i<64;i++)hist[i]/=tot;
-      const ac=document.createElement("canvas"),k=Math.min(1,120/Math.max(sw,sh));ac.width=Math.max(1,Math.round(sw*k));ac.height=Math.max(1,Math.round(sh*k));ac.getContext("2d").drawImage(im,sx,sy,sw,sh,0,0,ac.width,ac.height);
-      out.push({grid,hist,ar:bw/bh,asset:ac.toDataURL("image/jpeg",.8)});
+      out.push({grid,hist,ar:bw/bh});
     }
     return out;
-  }finally{im.close?.()}
 }
 function refDist(a,b){
   let g=0,h=0;for(let i=0;i<432;i++)g+=Math.abs(a.grid[i]-b.grid[i]);for(let i=0;i<64;i++)h+=Math.abs(a.hist[i]-b.hist[i]);
   return (g/432+.15*Math.abs(Math.log(a.ar/b.ar)))*.6+h/2*.2;
 }
-async function extractRefs(s,list){
-  SUG.busy=true;SUG.season=s.id;
-  for(let n=0;n<list.length;n++){
-    SUG.progress=`${n+1}/${list.length}`;
-    if(n%6===0)render();
-    const it=list[n];try{SUG.feats.set(it.thumb_path,await refBlobs(it))}catch(e){console.warn(e);SUG.feats.set(it.thumb_path,[])}
-  }
-  SUG.busy=false;SUG.progress="";render();
+// 참고 그림이 없으면(완성본 썸네일 등) 전체 색 분포 + 왼쪽 칸 밝기 배치로 비교
+function wholeFeatures(im){
+  const w=64,h=Math.max(1,Math.round(im.height*w/im.width)),c=document.createElement("canvas");c.width=w;c.height=h;
+  const ctx=c.getContext("2d",{willReadFrequently:true});ctx.drawImage(im,0,0,w,h);
+  const px=ctx.getImageData(0,0,w,h).data,hist=new Float32Array(64);let n=0;
+  for(let o=0;o<px.length;o+=4){const r=px[o],g=px[o+1],b=px[o+2];if(r>235&&g>235&&b>235)continue;hist[(r>>6)*16+(g>>6)*4+(b>>6)]++;n++}
+  if(n)for(let i=0;i<64;i++)hist[i]/=n;
+  const gw=12,gh=10,g2=document.createElement("canvas");g2.width=gw;g2.height=gh;
+  const x2=g2.getContext("2d",{willReadFrequently:true});x2.drawImage(im,0,0,im.width/2,im.height,0,0,gw,gh);
+  const p2=x2.getImageData(0,0,gw,gh).data,lay=new Float32Array(gw*gh);let mean=0,norm=0;
+  for(let i=0;i<lay.length;i++){lay[i]=(p2[i*4]+p2[i*4+1]+p2[i*4+2])/765;mean+=lay[i]}mean/=lay.length;
+  for(let i=0;i<lay.length;i++){lay[i]-=mean;norm+=lay[i]*lay[i]}norm=Math.sqrt(norm)||1;for(let i=0;i<lay.length;i++)lay[i]/=norm;
+  return {hist,lay};
 }
-// 그림 하나(덩어리 묶음)마다 추천 묶음 하나. 이미 묶인 의뢰서와 [아니야] 한 조합은 빼고, 더 큰 추천에 포함되는 건 숨긴다
-function suggestionsFor(s){
-  const items=itemsOf(s.id).filter(i=>i.thumb_path&&TR.thumbs[i.id]&&i.auto_done!==true);
-  const missing=items.filter(i=>!SUG.feats.has(i.thumb_path));
-  if(missing.length&&!SUG.busy)queueMicrotask(()=>extractRefs(s,missing));
-  const dismissed=new Set(s.settings?.dismissed_groups||[]),free=items.filter(i=>!i.group_id||!byId("groups",i.group_id));
-  const sig=JSON.stringify([s.id,free.map(i=>[i.id,i.thumb_path]),[...dismissed],SUG.feats.size]);
-  if(SUG.memoSig===sig)return SUG.memo;
-  const B=[];free.forEach(it=>(SUG.feats.get(it.thumb_path)||[]).forEach(f=>B.push({it,f})));
-  const par=B.map((_,i)=>i),find=i=>par[i]===i?i:(par[i]=find(par[i]));
-  for(let i=0;i<B.length;i++)for(let j=i+1;j<B.length;j++)if(B[i].it.id!==B[j].it.id&&refDist(B[i].f,B[j].f)<REF.cut)par[find(i)]=find(j);
-  const clusters=new Map();B.forEach((b,i)=>{const r=find(i);if(!clusters.has(r))clusters.set(r,{ids:new Set(),asset:b.f.asset});clusters.get(r).ids.add(b.it.id)});
-  let list=[...clusters.values()].filter(c=>c.ids.size>1).map(c=>{const ids=[...c.ids].sort();return {key:ids.join("|"),ids,asset:c.asset}});
-  const uniq=new Map();list.forEach(x=>{if(!uniq.has(x.key))uniq.set(x.key,x)});
-  list=[...uniq.values()].filter(x=>!dismissed.has(x.key));
-  list=list.filter(x=>!list.some(y=>y!==x&&y.ids.length>x.ids.length&&x.ids.every(id=>y.ids.includes(id))));
-  list.sort((a,b)=>b.ids.length-a.ids.length);
-  SUG.memoSig=sig;SUG.memo=list;return list;
+async function itemFeatures(it){
+  if(FEATS.has(it.thumb_path))return FEATS.get(it.thumb_path);
+  const im=await createImageBitmap(await (await fetch(TR.thumbs[it.id],{mode:"cors"})).blob());
+  try{const f={refs:it.auto_done===true?[]:refBlobsOf(im),whole:wholeFeatures(im)};FEATS.set(it.thumb_path,f);return f}finally{im.close?.()}
 }
-function nextGroupName(s){const names=new Set(TR.data.groups.filter(g=>g.season_id===s.id).map(g=>g.name));let n=names.size+1;while(names.has(`묶음 ${n}`))n++;return `묶음 ${n}`}
-async function makeGroup(s,ids){
-  const now=TR.data.groups.filter(g=>g.season_id===s.id),g={id:crypto.randomUUID(),season_id:s.id,name:nextGroupName(s),sort:Math.max(0,...now.map(x=>x.sort||0))+1};
-  const old=new Set(ids.map(id=>byId("items",id)?.group_id).filter(Boolean));
-  await put({groups:[g],items:ids.map(id=>byId("items",id)).filter(Boolean).map(it=>({...it,group_id:g.id}))});
-  await dropEmptyGroups(old);
-  toast(`🔗 ${g.name} · ${ids.length}건을 묶었어요. 이름은 눌러서 바꿀 수 있어요.`,3500);
+function itemDist(a,b){
+  if(a.refs.length&&b.refs.length){let m=Infinity;for(const x of a.refs)for(const y of b.refs)m=Math.min(m,refDist(x,y));return m}
+  let h=0,dot=0;for(let i=0;i<64;i++)h+=Math.abs(a.whole.hist[i]-b.whole.hist[i]);for(let i=0;i<a.whole.lay.length;i++)dot+=a.whole.lay[i]*b.whole.lay[i];
+  return .3+(h/2+(1-dot)/2)/2;
 }
-async function dropEmptyGroups(gids){for(const gid of gids)if(byId("groups",gid)&&!TR.data.items.some(i=>i.group_id===gid))await remove("groups",gid)}
-async function onGroupDrop(evt){
-  TR.dragging=false;
-  const id=evt.item.dataset.item,from=evt.from.dataset.glist,to=evt.to.dataset.glist,it=byId("items",id),s=season();
-  if(!it||!s||(from===to&&evt.oldIndex===evt.newIndex)){render();return}
-  const changed=new Map(normalizeOrder(s).map(r=>[r.id,r]));
-  // 완료 칸으로 끌면 완료 (묶음은 그대로 둔다)
-  if(to==="done"){if(changed.size)await put({items:[...changed.values()]});if(!isDone(it))await setDone(id,true);else render();return}
-  const ids=[...evt.to.querySelectorAll("[data-item]")].map(x=>x.dataset.item),k=ids.indexOf(id);
-  const prev=byId("items",ids[k-1]),next=byId("items",ids[k+1]);
-  const so=prev&&next?(prev.sort_order+next.sort_order)/2:prev?prev.sort_order+1024:next?next.sort_order-1024:it.sort_order;
-  const row={...it,sort_order:so,group_id:to==="none"?null:to};
-  if(from==="done"){row.status="todo";row.completed_at=null;row.confirmed=true}
-  changed.set(id,row);
-  await put({items:[...changed.values()]});
-  if(from&&from!=="none"&&from!=="done")await dropEmptyGroups([from]);
+// 난이도 칸마다 같은 참고 그림을 쓰는 의뢰서가 옆에 오도록 순서를 다시 매긴다 (가까운 것부터 이어 붙이기)
+async function arrangeSimilar(){
+  if(!guardOnline())return;
+  const s=season();if(!s)return;
+  const tab=TR.conceptTab,changed=new Map(normalizeOrder(s).map(r=>[r.id,r]));
+  let moved=0;TR.progress="비슷한 것끼리 정리 중";render();
+  try{
+    for(const [k] of DIFF){
+      const list=itemsOf(s.id).filter(i=>!isDone(i)&&(i.difficulty||"M")===k&&(tab==="all"||i.concept_id===tab)).sort(galleryCmp);
+      const feats=new Map();
+      for(const it of list)if(TR.thumbs[it.id]&&it.thumb_path){try{feats.set(it.id,await itemFeatures(it))}catch(e){console.warn(e)}}
+      const pool=list.filter(i=>feats.has(i.id));if(pool.length<3)continue;
+      const chain=[pool[0]],rest=new Set(pool.slice(1));
+      while(rest.size){const last=feats.get(chain[chain.length-1].id);let best=null,bd=Infinity;for(const c of rest){const dd=itemDist(last,feats.get(c.id));if(dd<bd){bd=dd;best=c}}chain.push(best);rest.delete(best)}
+      const seq=[...chain,...list.filter(i=>!feats.has(i.id))],slots=list.map(i=>i.sort_order).sort((a,b)=>a-b);
+      seq.forEach((it,n)=>{if(it.sort_order!==slots[n]){changed.set(it.id,{...(changed.get(it.id)||it),sort_order:slots[n]});moved++}});
+    }
+  }finally{TR.progress=""}
+  if(changed.size)await put({items:[...changed.values()]});else render();
+  toast(moved?"같은 참고 그림을 쓰는 것끼리 옆에 붙였어요. 묶으려면 ☑︎ 선택 → 🔗 묶기.":"바꿀 게 없었어요. 같은 난이도 칸에 썸네일 있는 카드가 3개 이상일 때 정리돼요.",4500);
 }
 
 /* ---------- 화면 ---------- */
@@ -560,7 +554,7 @@ function conceptColor(cid){
   const c=byId("concepts",cid);if(!c)return PALETTE.brown;
   const s=byId("seasons",c.season_id),pick=s?.settings?.concept_colors?.[cid];
   if(PALETTE[pick])return PALETTE[pick];
-  const word=k=>COLOR_WORDS.find(([re])=>re.test(byId("concepts",k)?.name||""))?.[1];
+  const word=k=>COLOR_WORDS.find(([re])=>re.test(nfc(byId("concepts",k)?.name)))?.[1];
   const own=word(cid);if(own)return PALETTE[own];
   const list=conceptsOf(c.season_id),used=new Set(list.map(x=>s?.settings?.concept_colors?.[x.id]||word(x.id)).filter(Boolean));
   const free=Object.keys(PALETTE).filter(k=>!used.has(k)),rest=list.filter(x=>!PALETTE[s?.settings?.concept_colors?.[x.id]]&&!word(x.id));
@@ -670,13 +664,29 @@ function viewToday(s){
 const DIFF=[["S","쉬움"],["M","중간"],["L","어려움"]];
 const DIFF_LABEL=Object.fromEntries(DIFF);
 const ZOOMS=[120,160,220,300,420];
-function galleryCard(it,s,opts={}){
-  const guess=it.auto_done!=null&&!it.confirmed,g=!opts.noGroup&&it.group_id&&byId("groups",it.group_id),sel=TR.selecting&&TR.selected.has(it.id);
-  return `<div class="tr-card-item ${isDone(it)?"done":""} ${sel?"selected":""}" style="${cvars(it.concept_id)}" data-item="${esc(it.id)}" data-open="${esc(it.id)}" role="button" tabindex="0"><div class="tr-card-thumb">${thumbHTML(it)}${TR.selecting?`<span class="tr-check" aria-hidden="true">${sel?"✓":""}</span>`:g?`<span class="tr-gchip" title="묶음">🔗 ${esc(g.name)}</span>`:""}${it.important?`<span class="tr-badge star">⭐</span>`:""}<button class="tr-statebtn ${isDone(it)?"is-done":""}" data-tdone="${esc(it.id)}" data-tundo="${isDone(it)?1:""}" title="${isDone(it)?"누르면 미완료로":"누르면 완료로"}${guess?" (자동 추정)":""}">${isDone(it)?"✓ 완료":"미완료"}</button></div><span class="tr-card-label"><i class="tr-cdot"></i>${esc(it.code)}${it.item_type&&typeName(s,it.item_type)?` <small>${esc(typeName(s,it.item_type))}</small>`:""}</span></div>`;
+function galleryCard(it,s){
+  const guess=it.auto_done!=null&&!it.confirmed,sel=TR.selecting&&TR.selected.has(it.id);
+  return `<div class="tr-card-item ${isDone(it)?"done":""} ${sel?"selected":""}" style="${cvars(it.concept_id)}" data-item="${esc(it.id)}" data-open="${esc(it.id)}" role="button" tabindex="0"><div class="tr-card-thumb">${thumbHTML(it)}${TR.selecting?`<span class="tr-check" aria-hidden="true">${sel?"✓":""}</span>`:""}${it.important?`<span class="tr-badge star">⭐</span>`:""}<button class="tr-statebtn ${isDone(it)?"is-done":""}" data-tdone="${esc(it.id)}" data-tundo="${isDone(it)?1:""}" title="${isDone(it)?"누르면 미완료로":"누르면 완료로"}${guess?" (자동 추정)":""}">${isDone(it)?"✓ 완료":"미완료"}</button></div><span class="tr-card-label"><i class="tr-cdot"></i>${esc(it.code)}${it.item_type&&typeName(s,it.item_type)?` <small>${esc(typeName(s,it.item_type))}</small>`:""}</span></div>`;
+}
+// 묶음 줄: 묶은 카드만 무조건 한 줄 (많으면 카드가 작아진다)
+function bundleRow(g,list,s){
+  const all=itemsOf(s.id).filter(i=>i.group_id===g.id),done=all.filter(isDone).length;
+  return `<div class="tr-bundle" data-bundle="${esc(g.id)}" style="--n:${list.length}"><div class="tr-bundle-head" title="끌어서 묶음째 옮기기"><span class="tr-grip" aria-hidden="true">⠿</span><button class="tr-gname" data-grename="${esc(g.id)}" title="이름 바꾸기">🔗 ${esc(g.name)}</button><span class="tr-gcount"><b>${all.length}</b>건${done?` · 완료 <b>${done}</b>`:""} · 하나 끝내면 나머지는 복붙</span><button class="tr-btn sm ghost" data-gundo="${esc(g.id)}">묶음 풀기</button></div><div class="tr-bundle-list" data-blist="${esc(g.id)}">${list.map(it=>galleryCard(it,s)).join("")}</div></div>`;
+}
+// 칸 안의 순서대로 카드를 놓되, 묶인 카드는 그 묶음의 첫 카드 자리에 묶음 줄로 모은다
+function sectionBody(list,s){
+  const out=[],seen=new Set();
+  for(const it of list){
+    const g=it.group_id&&byId("groups",it.group_id);
+    if(!g){out.push(galleryCard(it,s));continue}
+    if(seen.has(g.id))continue;seen.add(g.id);
+    out.push(bundleRow(g,list.filter(x=>x.group_id===g.id),s));
+  }
+  return out.join("");
 }
 function gallerySection(key,label,list,s,hint){
   const closed=!!TR.collapsed[key];
-  return `<section class="tr-dsec ${closed?"closed":""}" data-sec="${key}"><button class="tr-dsec-head" data-collapse="${key}" aria-expanded="${!closed}"><span class="tr-caret">▾</span><b>${label}</b><span>${list.length}건</span>${hint?`<em>${hint}</em>`:""}</button><div class="tr-grid" data-list="${key}">${list.map(it=>galleryCard(it,s)).join("")}${list.length?"":`<div class="tr-grid-empty">여기로 끌어다 놓기</div>`}</div></section>`;
+  return `<section class="tr-dsec ${closed?"closed":""}" data-sec="${key}"><button class="tr-dsec-head" data-collapse="${key}" aria-expanded="${!closed}"><span class="tr-caret">▾</span><b>${label}</b><span>${list.length}건</span>${hint?`<em>${hint}</em>`:""}</button><div class="tr-grid" data-list="${key}">${key==="done"?list.map(it=>galleryCard(it,s)).join(""):sectionBody(list,s)}${list.length?"":`<div class="tr-grid-empty">여기로 끌어다 놓기</div>`}</div></section>`;
 }
 function conceptTabs(s,items){
   const tab=TR.conceptTab;
@@ -684,39 +694,14 @@ function conceptTabs(s,items){
 }
 function viewGallery(s,items){
   const tab=TR.conceptTab,shown=items.filter(i=>tab==="all"||i.concept_id===tab).sort(galleryCmp);
-  const pending=shown.filter(i=>!isDone(i)),done=shown.filter(isDone),byGroup=TR.galleryMode==="group";
-  const body=!shown.length?`<div class="empty">아직 의뢰서가 없어요.</div>`:byGroup?viewGroups(s,shown):`${DIFF.map(([k,l])=>gallerySection(k,l,pending.filter(i=>(i.difficulty||"M")===k),s)).join("")}${gallerySection("done","✓ 완료",done.sort((a,b)=>(b.completed_at||"").localeCompare(a.completed_at||"")),s,"카드를 여기로 끌어도 완료돼요")}`;
+  const pending=shown.filter(i=>!isDone(i)),done=shown.filter(isDone).sort((a,b)=>(b.completed_at||"").localeCompare(a.completed_at||""));
+  const body=!shown.length?`<div class="empty">아직 의뢰서가 없어요.</div>`:`${DIFF.map(([k,l])=>gallerySection(k,l,pending.filter(i=>(i.difficulty||"M")===k),s)).join("")}${gallerySection("done","✓ 완료",done,s,"카드를 여기로 끌어도 완료돼요")}`;
   return `<section class="section tr-gallery" data-zoom="${TR.zoom}" style="--tr-card:${ZOOMS[TR.zoom-1]||160}px">
   <div class="tr-menubar">${conceptTabs(s,items)}
-  <div class="tr-tools"><div class="tr-seg" role="tablist"><button data-gmode="diff" class="${byGroup?"":"on"}" role="tab" aria-selected="${!byGroup}">난이도별</button><button data-gmode="group" class="${byGroup?"on":""}" role="tab" aria-selected="${byGroup}">묶음별</button></div>
-  <button class="tr-btn sm ${TR.selecting?"on":""}" data-act="select">${TR.selecting?"선택 끝":"☑︎ 선택"}</button>${byGroup?"":`<button class="tr-btn sm tr-icon-btn" data-act="similar" title="비슷한 것끼리 옆에 붙이기" aria-label="비슷한 것끼리 옆에 붙이기">🧩</button>`}<div class="tr-zoom" role="group" aria-label="썸네일 크기"><button data-zoom="-1" ${TR.zoom<=1?"disabled":""} aria-label="작게" title="작게">−</button><button data-zoom="1" ${TR.zoom>=ZOOMS.length?"disabled":""} aria-label="크게" title="크게">＋</button></div></div></div>
+  <div class="tr-tools"><button class="tr-btn sm ${TR.selecting?"on":""}" data-act="select">${TR.selecting?"선택 끝":"☑︎ 선택"}</button><button class="tr-btn sm tr-icon-btn" data-act="similar" title="같은 참고 그림끼리 옆에 붙이기" aria-label="같은 참고 그림끼리 옆에 붙이기">🧩</button><div class="tr-zoom" role="group" aria-label="썸네일 크기"><button data-zoom="-1" ${TR.zoom<=1?"disabled":""} aria-label="작게" title="작게">−</button><button data-zoom="1" ${TR.zoom>=ZOOMS.length?"disabled":""} aria-label="크게" title="크게">＋</button></div></div></div>
   ${body}
-  <p class="tr-sub tr-gallery-tip">${byGroup?"카드를 다른 묶음 줄로 끌어서 옮겨요. ☑︎ 선택으로 여러 개 골라 [묶기]를 누르면 새 묶음이 돼요.":"카드를 끌어서 순서·난이도를 바꿔요 (폰은 길게 누른 뒤 끌기). 오른쪽 아래 버튼으로 완료/미완료를 바꿔요."}</p></section>
+  <p class="tr-sub tr-gallery-tip">카드나 묶음 줄을 끌어서 원하는 자리·난이도로 옮겨요 (폰은 길게 누른 뒤 끌기). ☑︎ 선택 → 🔗 묶기로 한 줄 묶음, 카드를 묶음 줄 안팎으로 끌면 넣고 빼요.</p></section>
   ${TR.selecting?`<div class="tr-selbar" role="toolbar"><span><b>${TR.selected.size}</b>개 선택</span><button class="tr-btn primary" data-act="group-make" ${TR.selected.size<2?"disabled":""}>🔗 묶기</button>${[...TR.selected].some(id=>byId("items",id)?.group_id)?`<button class="tr-btn" data-act="group-out">묶음에서 빼기</button>`:""}<button class="tr-btn ghost" data-act="select">취소</button></div>`:""}`;
-}
-// 묶음별 보기: 추천 묶음 → 내 묶음(한 줄씩) → 묶음 없음
-function viewGroups(s,shown){
-  const groups=TR.data.groups.filter(g=>g.season_id===s.id).sort((a,b)=>(a.sort??0)-(b.sort??0)||(a.created_at||"").localeCompare(b.created_at||""));
-  const ids=new Set(shown.map(i=>i.id)),sg=suggestionsFor(s).filter(x=>x.ids.some(id=>ids.has(id)));
-  const busy=SUG.busy&&SUG.season===s.id;
-  const sugHTML=sg.length||busy?`<section class="tr-dsec tr-suggest ${TR.collapsed.suggest?"closed":""}" data-sec="suggest"><button class="tr-dsec-head" data-collapse="suggest"><span class="tr-caret">▾</span><b>추천 묶음</b><span>${busy?`같은 그림 찾는 중… ${SUG.progress}`:`${sg.length}개`}</span><em>의뢰서 아래쪽 참고 그림이 같은 것끼리</em></button><div class="tr-glist">${sg.map(x=>`<div class="tr-grow tr-grow-sug"><div class="tr-ghead">${x.asset?`<img class="tr-asset" src="${x.asset}" alt="같은 참고 그림">`:""}<b>같은 그림 ${x.ids.length}건</b><span class="tr-gacts"><button class="tr-btn sm primary" data-sug-ok="${esc(x.key)}">✓ 묶기</button><button class="tr-btn sm ghost" data-sug-no="${esc(x.key)}">✕ 아니야</button></span></div><div class="tr-strip">${x.ids.map(id=>byId("items",id)).filter(Boolean).map(it=>galleryCard(it,s,{noGroup:true})).join("")}</div></div>`).join("")}</div></section>`:"";
-  // 완료한 의뢰서는 묶음 줄에서 빼서 맨 아래 완료 칸으로 (묶음 머리에는 완료 개수만)
-  const pending=shown.filter(i=>!isDone(i)),done=shown.filter(isDone).sort((a,b)=>(b.completed_at||"").localeCompare(a.completed_at||""));
-  const rows=groups.map(g=>{
-    const all=itemsOf(s.id).filter(i=>i.group_id===g.id),list=pending.filter(i=>i.group_id===g.id).sort(galleryCmp);
-    if(!all.length||!list.length)return"";
-    const done=all.filter(isDone).length;
-    return `<div class="tr-grow" data-gid="${esc(g.id)}"><div class="tr-ghead"><button class="tr-gname" data-grename="${esc(g.id)}" title="이름 바꾸기">🔗 ${esc(g.name)}</button><span class="tr-gcount"><b>${all.length}</b>건 · 완료 <b>${done}</b>/${all.length}</span><span class="tr-gacts"><button class="tr-btn sm ghost" data-gundo="${esc(g.id)}">묶음 풀기</button></span></div><div class="tr-strip" data-glist="${esc(g.id)}">${list.map(it=>galleryCard(it,s,{noGroup:true})).join("")}</div></div>`;
-  }).join("");
-  const loose=pending.filter(i=>!i.group_id||!byId("groups",i.group_id));
-  const allDone=groups.filter(g=>{const m=itemsOf(s.id).filter(i=>i.group_id===g.id);return m.length&&m.every(isDone)}).length;
-  return `${sugHTML}<section class="tr-dsec ${TR.collapsed.groups?"closed":""}" data-sec="groups"><button class="tr-dsec-head" data-collapse="groups"><span class="tr-caret">▾</span><b>내 묶음</b><span>${groups.filter(g=>pending.some(i=>i.group_id===g.id)).length}개${allDone?` · 다 끝낸 묶음 ${allDone}개`:""}</span><em>하나 끝내면 나머지는 복붙</em></button><div class="tr-glist">${rows||`<div class="tr-grid-empty">${groups.length?"남은 묶음이 없어요.":"아직 묶음이 없어요. 추천 묶음에서 [✓ 묶기]를 누르거나 ☑︎ 선택으로 직접 묶어요."}</div>`}</div></section>
-  ${gallerySectionG("loose","묶음 없음",loose.sort(galleryCmp),s,"none","모두 묶였어요")}
-  ${gallerySectionG("done","✓ 완료",done,s,"done","여기로 끌어다 놓으면 완료돼요","카드를 여기로 끌어도 완료돼요")}`;
-}
-function gallerySectionG(key,label,list,s,glist,empty,hint){
-  const closed=!!TR.collapsed[key];
-  return `<section class="tr-dsec ${closed?"closed":""}" data-sec="${key}"><button class="tr-dsec-head" data-collapse="${key}"><span class="tr-caret">▾</span><b>${label}</b><span>${list.length}건</span>${hint?`<em>${hint}</em>`:""}</button><div class="tr-grid" data-glist="${glist}">${list.map(it=>galleryCard(it,s)).join("")}${list.length?"":`<div class="tr-grid-empty">${empty}</div>`}</div></section>`;
 }
 function viewSeason(s){
   const st=seasonStats(s),items=itemsOf(s.id);
@@ -741,7 +726,7 @@ function viewSettings(s){
   return `<section class="card tr-card"><h3>시즌</h3>${TR.data.seasons.length>1?`<label class="tr-inline">보는 시즌<select data-change="season">${TR.data.seasons.map(x=>`<option value="${esc(x.id)}" ${x.id===s.id?"selected":""}>${esc(x.name)}</option>`).join("")}</select></label>`:""}
   <form class="tr-form" data-form="season-edit"><label>이름<input name="name" value="${esc(s.name)}" required></label><label>마감일<input type="date" name="deadline" value="${esc(s.deadline||"")}"></label><label>검수 여유일 <small>영업일 · 마감일 당일은 작업일 아님</small><input type="number" name="review_days" min="0" max="10" value="${Number(s.review_days)||0}"></label><label>계획 시작일 <small>기대 진행률 기준</small><input type="date" name="start_date" value="${esc(s.start_date||"")}"></label><label>휴무일 <small>쉼표로 구분 · 예: 2026-10-09</small><input name="holidays" value="${esc((s.holidays||[]).join(", "))}"></label><button class="tr-btn primary" type="submit">저장</button></form>
   <p class="tr-sub">제작 마감 ${prodEnd(s)?md(prodEnd(s)):"–"} · 오늘부터 제작일 ${seasonStats(s).left}일</p></section>
-  <section class="card tr-card"><h3>컨셉</h3><p class="tr-sub">목표를 비워 두면 등록된 파일 수가 목표예요.</p><div class="tr-concepts">${conceptsOf(s.id).map(c=>`<form class="tr-concept-row" data-form="concept" data-id="${esc(c.id)}"><input name="name" value="${esc(c.name)}" aria-label="컨셉 이름"><input name="target" type="number" min="0" value="${c.target??""}" placeholder="${itemsOf(s.id).filter(i=>i.concept_id===c.id).length}" aria-label="목표 개수"><select name="color" aria-label="컨셉 색" style="${cvars(c.id)}" class="tr-color-pick"><option value="">자동</option>${Object.entries(PALETTE).map(([k,[l]])=>`<option value="${k}" ${s.settings?.concept_colors?.[c.id]===k?"selected":""}>${l}</option>`).join("")}</select><button class="tr-btn sm" type="submit">저장</button><button class="tr-btn sm ghost" type="button" data-del-concept="${esc(c.id)}">삭제</button></form>`).join("")||`<div class="empty">아직 컨셉이 없어요.</div>`}</div>
+  <section class="card tr-card"><h3>컨셉</h3><p class="tr-sub">목표를 비워 두면 등록된 파일 수가 목표예요.</p><div class="tr-concepts">${conceptsOf(s.id).map((c,n,arr)=>`<form class="tr-concept-row" data-form="concept" data-id="${esc(c.id)}"><span class="tr-corder"><button type="button" class="tr-cmove" data-cmove="${esc(c.id)}" data-dir="-1" ${n?"":"disabled"} aria-label="위로">▲</button><button type="button" class="tr-cmove" data-cmove="${esc(c.id)}" data-dir="1" ${n<arr.length-1?"":"disabled"} aria-label="아래로">▼</button></span><input name="name" value="${esc(c.name)}" aria-label="컨셉 이름"><input name="target" type="number" min="0" value="${c.target??""}" placeholder="${itemsOf(s.id).filter(i=>i.concept_id===c.id).length}" aria-label="목표 개수"><select name="color" aria-label="컨셉 색" style="${cvars(c.id)}" class="tr-color-pick"><option value="">자동</option>${Object.entries(PALETTE).map(([k,[l]])=>`<option value="${k}" ${s.settings?.concept_colors?.[c.id]===k?"selected":""}>${l}</option>`).join("")}</select><button class="tr-btn sm" type="submit">저장</button><button class="tr-btn sm ghost" type="button" data-del-concept="${esc(c.id)}">삭제</button></form>`).join("")||`<div class="empty">아직 컨셉이 없어요.</div>`}</div>
   <form class="tr-concept-row" data-form="concept-new"><input name="name" placeholder="새 컨셉 이름" required><input name="target" type="number" min="0" placeholder="목표"><button class="tr-btn sm" type="submit">추가</button></form></section>
   ${types.length?`<section class="card tr-card"><h3>품목 코드 이름</h3><form class="tr-form" data-form="types">${types.map(t=>`<label class="tr-inline">${esc(t)}<input name="${esc(t)}" value="${esc(typeName(s,t))}" placeholder="예: 반팔 티셔츠"></label>`).join("")}<button class="tr-btn primary" type="submit">저장</button></form></section>`:""}
   <section class="card tr-card"><h3>새 시즌</h3><form class="tr-form" data-form="season-new"><label>시즌<input name="name" placeholder="예: 27FW" required></label><label>마감일<input type="date" name="deadline" required></label><label>검수 여유일<input type="number" name="review_days" min="0" max="10" value="1"></label><button class="tr-btn" type="submit">만들기</button></form></section>
@@ -770,12 +755,11 @@ async function onClick(e){
   if(d.ctab){TR.conceptTab=d.ctab;saveUI();render();return}
   if(d.zoom){TR.zoom=Math.min(ZOOMS.length,Math.max(1,TR.zoom+Number(d.zoom)));saveUI();render();return}
   if(d.collapse){TR.collapsed[d.collapse]=!TR.collapsed[d.collapse];saveUI();render();return}
-  if(d.gmode){TR.galleryMode=d.gmode;saveUI();render();return}
   // 선택 모드에서는 카드를 누르면 열지 않고 체크만
   if(d.open&&TR.selecting&&!e.target.closest("[data-tdone]")){TR.selected.has(d.open)?TR.selected.delete(d.open):TR.selected.add(d.open);render();return}
-  if(d.sugOk){const s=season(),x=SUG.memo.find(y=>y.key===d.sugOk);if(s&&x)await makeGroup(s,x.ids);return}
-  if(d.sugNo){const s=season();if(!s)return;await put({seasons:[{...s,settings:{...(s.settings||{}),dismissed_groups:[...new Set([...(s.settings?.dismissed_groups||[]),d.sugNo])]}}]});toast("이 추천은 다시 안 보여줄게요.");return}
   if(d.grename){const g=byId("groups",d.grename);if(!g)return;const v=prompt("묶음 이름",g.name);if(v===null||!v.trim())return;await put({groups:[{...g,name:v.trim().slice(0,30)}]});return}
+  // 설정: 컨셉 순서 (컨셉 탭·컨셉 카드·폴더 목록 순서)
+  if(d.cmove){const s=season();if(!s)return;const list=conceptsOf(s.id),i=list.findIndex(c=>c.id===d.cmove),j=i+Number(d.dir);if(i<0||j<0||j>=list.length)return;[list[i],list[j]]=[list[j],list[i]];await put({concepts:list.map((c,n)=>({...c,sort:n+1}))});return}
   if(d.gundo){const g=byId("groups",d.gundo);if(!g)return;await remove("groups",g.id);toast(`${g.name} 묶음을 풀었어요. 의뢰서는 그대로예요.`);return}
   if(d.open&&!e.target.closest("[data-tdone],[data-focus]")){openSheet(d.open);return}
   if(d.focus){if(sheet.open)sheet.close();await startFocus(d.focus);return}
@@ -805,7 +789,7 @@ async function onClick(e){
     case"similar":await arrangeSimilar();break;
     case"select":TR.selecting=!TR.selecting;TR.selected.clear();render();break;
     case"group-make":{const s=season(),ids=[...TR.selected];if(!s||ids.length<2)break;TR.selecting=false;TR.selected.clear();await makeGroup(s,ids);break}
-    case"group-out":{const ids=[...TR.selected],old=new Set(ids.map(id=>byId("items",id)?.group_id).filter(Boolean));TR.selecting=false;TR.selected.clear();await put({items:ids.map(id=>byId("items",id)).filter(i=>i?.group_id).map(i=>({...i,group_id:null}))});await dropEmptyGroups(old);toast("묶음에서 뺐어요.");break}
+    case"group-out":{const ids=[...TR.selected],old=new Set(ids.map(id=>byId("items",id)?.group_id).filter(Boolean));TR.selecting=false;TR.selected.clear();await put({items:ids.map(id=>byId("items",id)).filter(i=>i?.group_id).map(i=>({...i,group_id:null}))});await dissolveSmallGroups(old);toast("묶음에서 뺐어요.");break}
     case"confirm-all":{const s=season();await put({items:itemsOf(s.id).filter(i=>i.auto_done!=null&&!i.confirmed).map(i=>({...i,confirmed:true}))});break}
     case"backup":{const blob=new Blob([JSON.stringify({exported_at:nowISO(),...TR.data},null,2)],{type:"application/json"}),a=document.createElement("a");a.href=URL.createObjectURL(blob);a.download=`tracker-backup-${todayISO()}.json`;a.click();setTimeout(()=>URL.revokeObjectURL(a.href),1000);break}
   }
@@ -831,7 +815,7 @@ document.addEventListener("submit",async e=>{
   }else if(kind==="concept"){
     const c=byId("concepts",f.dataset.id),colors={...(s.settings?.concept_colors||{})};
     if(PALETTE[v.color])colors[c.id]=v.color;else delete colors[c.id];
-    await put({concepts:[{...c,name:v.name.trim()||c.name,target:v.target===""?null:Math.max(0,parseInt(v.target,10)||0)}],seasons:[{...s,settings:{...(s.settings||{}),concept_colors:colors}}]});toast("저장했어요.");
+    await put({concepts:[{...c,name:nfc(v.name).trim()||c.name,target:v.target===""?null:Math.max(0,parseInt(v.target,10)||0)}],seasons:[{...s,settings:{...(s.settings||{}),concept_colors:colors}}]});toast("저장했어요.");
   }else if(kind==="concept-new"){
     const name=slug(v.name);if(!name)return;const id=`${s.id}:${name}`;
     if(byId("concepts",id)){toast("이미 있는 컨셉이에요.");return}
