@@ -321,7 +321,7 @@ async function seasonForFile(token,cur){
 async function importFiles(files){
   if(!guardOnline())return;
   files=files.filter(f=>isDesign(f)||isImage(f));
-  if(!files.length){toast(".ai / .pdf / 이미지 파일만 등록할 수 있어요.");return}
+  if(!files.length)return;
   let s=season();
   const report={added:0,updated:0,failed:[],errors:[]},left=new Set();
   for(let n=0;n<files.length;n++){
@@ -536,12 +536,16 @@ async function onGroupDrop(evt){
   const id=evt.item.dataset.item,from=evt.from.dataset.glist,to=evt.to.dataset.glist,it=byId("items",id),s=season();
   if(!it||!s||(from===to&&evt.oldIndex===evt.newIndex)){render();return}
   const changed=new Map(normalizeOrder(s).map(r=>[r.id,r]));
+  // 완료 칸으로 끌면 완료 (묶음은 그대로 둔다)
+  if(to==="done"){if(changed.size)await put({items:[...changed.values()]});if(!isDone(it))await setDone(id,true);else render();return}
   const ids=[...evt.to.querySelectorAll("[data-item]")].map(x=>x.dataset.item),k=ids.indexOf(id);
   const prev=byId("items",ids[k-1]),next=byId("items",ids[k+1]);
   const so=prev&&next?(prev.sort_order+next.sort_order)/2:prev?prev.sort_order+1024:next?next.sort_order-1024:it.sort_order;
-  changed.set(id,{...it,sort_order:so,group_id:to==="none"?null:to});
+  const row={...it,sort_order:so,group_id:to==="none"?null:to};
+  if(from==="done"){row.status="todo";row.completed_at=null;row.confirmed=true}
+  changed.set(id,row);
   await put({items:[...changed.values()]});
-  if(from&&from!=="none")await dropEmptyGroups([from]);
+  if(from&&from!=="none"&&from!=="done")await dropEmptyGroups([from]);
 }
 
 /* ---------- 화면 ---------- */
@@ -582,10 +586,13 @@ function build(){
   let depth=0;
   root.addEventListener("dragenter",e=>{if(![...(e.dataTransfer?.types||[])].includes("Files"))return;depth++;root.classList.add("dragging")});
   root.addEventListener("dragleave",()=>{depth=Math.max(0,depth-1);if(!depth)root.classList.remove("dragging")});
-  root.addEventListener("dragover",e=>{e.preventDefault();const card=e.target.closest?.("[data-item]");root.querySelectorAll(".drop-target").forEach(x=>x!==card&&x.classList.remove("drop-target"));card?.classList.add("drop-target")});
+  root.addEventListener("dragover",e=>{if(![...(e.dataTransfer?.types||[])].includes("Files"))return;e.preventDefault();const card=e.target.closest?.("[data-item]");root.querySelectorAll(".drop-target").forEach(x=>x!==card&&x.classList.remove("drop-target"));card?.classList.add("drop-target")});
   root.addEventListener("drop",async e=>{
     e.preventDefault();depth=0;root.classList.remove("dragging");
-    const card=e.target.closest?.("[data-item]");root.querySelectorAll(".drop-target").forEach(x=>x.classList.remove("drop-target"));
+    root.querySelectorAll(".drop-target").forEach(x=>x.classList.remove("drop-target"));
+    // 카드 끌어서 옮기기(SortableJS)도 drop 이벤트가 나서, 진짜 파일을 놓았을 때만 등록한다
+    if(![...(e.dataTransfer?.types||[])].includes("Files"))return;
+    const card=e.target.closest?.("[data-item]");
     const files=await filesFromDrop(e.dataTransfer);
     if(card&&files.length===1)replaceThumb(card.dataset.item,files[0]);else importFiles(files);
   });
@@ -693,19 +700,23 @@ function viewGroups(s,shown){
   const ids=new Set(shown.map(i=>i.id)),sg=suggestionsFor(s).filter(x=>x.ids.some(id=>ids.has(id)));
   const busy=SUG.busy&&SUG.season===s.id;
   const sugHTML=sg.length||busy?`<section class="tr-dsec tr-suggest ${TR.collapsed.suggest?"closed":""}" data-sec="suggest"><button class="tr-dsec-head" data-collapse="suggest"><span class="tr-caret">▾</span><b>추천 묶음</b><span>${busy?`같은 그림 찾는 중… ${SUG.progress}`:`${sg.length}개`}</span><em>의뢰서 아래쪽 참고 그림이 같은 것끼리</em></button><div class="tr-glist">${sg.map(x=>`<div class="tr-grow tr-grow-sug"><div class="tr-ghead">${x.asset?`<img class="tr-asset" src="${x.asset}" alt="같은 참고 그림">`:""}<b>같은 그림 ${x.ids.length}건</b><span class="tr-gacts"><button class="tr-btn sm primary" data-sug-ok="${esc(x.key)}">✓ 묶기</button><button class="tr-btn sm ghost" data-sug-no="${esc(x.key)}">✕ 아니야</button></span></div><div class="tr-strip">${x.ids.map(id=>byId("items",id)).filter(Boolean).map(it=>galleryCard(it,s,{noGroup:true})).join("")}</div></div>`).join("")}</div></section>`:"";
+  // 완료한 의뢰서는 묶음 줄에서 빼서 맨 아래 완료 칸으로 (묶음 머리에는 완료 개수만)
+  const pending=shown.filter(i=>!isDone(i)),done=shown.filter(isDone).sort((a,b)=>(b.completed_at||"").localeCompare(a.completed_at||""));
   const rows=groups.map(g=>{
-    const all=itemsOf(s.id).filter(i=>i.group_id===g.id),list=shown.filter(i=>i.group_id===g.id).sort(galleryCmp);
+    const all=itemsOf(s.id).filter(i=>i.group_id===g.id),list=pending.filter(i=>i.group_id===g.id).sort(galleryCmp);
     if(!all.length||!list.length)return"";
     const done=all.filter(isDone).length;
     return `<div class="tr-grow" data-gid="${esc(g.id)}"><div class="tr-ghead"><button class="tr-gname" data-grename="${esc(g.id)}" title="이름 바꾸기">🔗 ${esc(g.name)}</button><span class="tr-gcount"><b>${all.length}</b>건 · 완료 <b>${done}</b>/${all.length}</span><span class="tr-gacts"><button class="tr-btn sm ghost" data-gundo="${esc(g.id)}">묶음 풀기</button></span></div><div class="tr-strip" data-glist="${esc(g.id)}">${list.map(it=>galleryCard(it,s,{noGroup:true})).join("")}</div></div>`;
   }).join("");
-  const loose=shown.filter(i=>!i.group_id||!byId("groups",i.group_id));
-  return `${sugHTML}<section class="tr-dsec ${TR.collapsed.groups?"closed":""}" data-sec="groups"><button class="tr-dsec-head" data-collapse="groups"><span class="tr-caret">▾</span><b>내 묶음</b><span>${groups.filter(g=>shown.some(i=>i.group_id===g.id)).length}개</span><em>하나 끝내면 나머지는 복붙</em></button><div class="tr-glist">${rows||`<div class="tr-grid-empty">아직 묶음이 없어요. 추천 묶음에서 [✓ 묶기]를 누르거나 ☑︎ 선택으로 직접 묶어요.</div>`}</div></section>
-  ${gallerySectionG("loose","묶음 없음",loose.sort(galleryCmp),s)}`;
+  const loose=pending.filter(i=>!i.group_id||!byId("groups",i.group_id));
+  const allDone=groups.filter(g=>{const m=itemsOf(s.id).filter(i=>i.group_id===g.id);return m.length&&m.every(isDone)}).length;
+  return `${sugHTML}<section class="tr-dsec ${TR.collapsed.groups?"closed":""}" data-sec="groups"><button class="tr-dsec-head" data-collapse="groups"><span class="tr-caret">▾</span><b>내 묶음</b><span>${groups.filter(g=>pending.some(i=>i.group_id===g.id)).length}개${allDone?` · 다 끝낸 묶음 ${allDone}개`:""}</span><em>하나 끝내면 나머지는 복붙</em></button><div class="tr-glist">${rows||`<div class="tr-grid-empty">${groups.length?"남은 묶음이 없어요.":"아직 묶음이 없어요. 추천 묶음에서 [✓ 묶기]를 누르거나 ☑︎ 선택으로 직접 묶어요."}</div>`}</div></section>
+  ${gallerySectionG("loose","묶음 없음",loose.sort(galleryCmp),s,"none","모두 묶였어요")}
+  ${gallerySectionG("done","✓ 완료",done,s,"done","여기로 끌어다 놓으면 완료돼요","카드를 여기로 끌어도 완료돼요")}`;
 }
-function gallerySectionG(key,label,list,s){
+function gallerySectionG(key,label,list,s,glist,empty,hint){
   const closed=!!TR.collapsed[key];
-  return `<section class="tr-dsec ${closed?"closed":""}" data-sec="${key}"><button class="tr-dsec-head" data-collapse="${key}"><span class="tr-caret">▾</span><b>${label}</b><span>${list.length}건</span></button><div class="tr-grid" data-glist="none">${list.map(it=>galleryCard(it,s)).join("")}${list.length?"":`<div class="tr-grid-empty">모두 묶였어요</div>`}</div></section>`;
+  return `<section class="tr-dsec ${closed?"closed":""}" data-sec="${key}"><button class="tr-dsec-head" data-collapse="${key}"><span class="tr-caret">▾</span><b>${label}</b><span>${list.length}건</span>${hint?`<em>${hint}</em>`:""}</button><div class="tr-grid" data-glist="${glist}">${list.map(it=>galleryCard(it,s)).join("")}${list.length?"":`<div class="tr-grid-empty">${empty}</div>`}</div></section>`;
 }
 function viewSeason(s){
   const st=seasonStats(s),items=itemsOf(s.id);
