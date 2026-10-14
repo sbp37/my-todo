@@ -112,6 +112,8 @@ Vercel과 GitHub는 자동 배포 링크가 설정되어 있지 않을 수 있�
 - 트래커 버튼에는 `data-done` 같은 기존 앱 속성을 쓰지 않는다 (`app-render.js`가 문서 전체의 `[data-done]`에 클릭을 묶는다). 트래커는 `data-tdone` 등을 쓴다.
 - DB: `tracker_seasons`, `tracker_concepts`, `tracker_items`, `tracker_sessions`, `tracker_days` (스키마는 `supabase/migrations/`), 썸네일은 비공개 Storage 버킷 `tracker-thumbs`
 - API: 기존 `assistant-api`에 `GET ?resource=tracker`, `POST action=tracker_upsert|tracker_delete|tracker_thumb` 추가. 트래커 로직은 `supabase/functions/assistant-api/tracker.ts`. 배포된 `index.ts`는 인증 해시가 있어서 저장소에 두지 않는다.
+- 폴더째 올리면 폴더 이름이 컨셉이 된다. 같은 시즌에 같은 품목 코드가 있으면 새 버전으로 갱신한다(중복 생성 안 함).
+- 갤러리 순서는 `tracker_items.sort_order`(드래그), 난이도 칸은 `difficulty`(S 쉬움 / M 중간 / L 어려움). 정렬은 SortableJS(cdnjs)로 한다.
 - `.ai` 원본과 썸네일은 GitHub에 커밋하지 않는다.
 
 ## 캘린더

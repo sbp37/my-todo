@@ -8,7 +8,7 @@ const THUMB_TTL = 60 * 60 * 12
 const TABLES: Record<string, string[]> = {
   tracker_seasons: ['id', 'name', 'deadline', 'review_days', 'start_date', 'holidays', 'settings', 'active'],
   tracker_concepts: ['id', 'season_id', 'name', 'target', 'sort'],
-  tracker_items: ['id', 'season_id', 'concept_id', 'code', 'item_type', 'file_name', 'difficulty', 'important', 'pinned_at', 'status', 'auto_done', 'auto_score', 'confirmed', 'completed_at', 'note'],
+  tracker_items: ['id', 'season_id', 'concept_id', 'code', 'item_type', 'file_name', 'difficulty', 'important', 'pinned_at', 'status', 'auto_done', 'auto_score', 'confirmed', 'completed_at', 'note', 'sort_order'],
   tracker_sessions: ['id', 'item_id', 'season_id', 'started_at', 'ended_at', 'paused_ms', 'pause_started_at', 'focus_sec'],
   tracker_days: ['id', 'season_id', 'date', 'goal', 'carry', 'share', 'picks'],
 }

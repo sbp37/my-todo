@@ -87,3 +87,6 @@ end $$;
 insert into storage.buckets (id, name, public, file_size_limit, allowed_mime_types)
 values ('tracker-thumbs', 'tracker-thumbs', false, 1048576, array['image/jpeg'])
 on conflict (id) do nothing;
+
+-- 갤러리 수동 정렬(드래그) 순서 (tracker_items_sort_order 마이그레이션)
+alter table public.tracker_items add column sort_order double precision;

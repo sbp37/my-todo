@@ -11,10 +11,11 @@ const KINDS=Object.keys(TABLE);
 const TR={
   data:{seasons:[],concepts:[],items:[],sessions:[],days:[]},
   thumbs:{},loaded:false,offline:false,pending:0,
-  open:false,view:"today",seasonId:"",conceptTab:"all",skip:0,oneOnly:false,detail:null,progress:""
+  open:false,view:"today",seasonId:"",conceptTab:"all",skip:0,oneOnly:false,detail:null,progress:"",
+  zoom:2,collapsed:{}
 };
 try{Object.assign(TR,JSON.parse(localStorage.getItem(UI_KEY)||"{}"))}catch(e){}
-const saveUI=()=>{try{localStorage.setItem(UI_KEY,JSON.stringify({view:TR.view,seasonId:TR.seasonId,conceptTab:TR.conceptTab,oneOnly:TR.oneOnly}))}catch(e){}};
+const saveUI=()=>{try{localStorage.setItem(UI_KEY,JSON.stringify({view:TR.view,seasonId:TR.seasonId,conceptTab:TR.conceptTab,oneOnly:TR.oneOnly,zoom:TR.zoom,collapsed:TR.collapsed}))}catch(e){}};
 
 /* ---------- 날짜 ---------- */
 const D={
@@ -119,12 +120,15 @@ function lastType(s){
   const last=its.filter(isDone).sort((a,b)=>(b.completed_at||"").localeCompare(a.completed_at||""))[0];
   return last?.item_type||"";
 }
-// 우선순위: (직접 올림) → 이월 → 가장 뒤처진 컨셉 → 같은 품목 연달아 → 중요 표시
+// 갤러리 순서: 직접 끌어서 정한 순서(sort_order) → 없으면 품목 코드순
+const galleryCmp=(a,b)=>(a.sort_order==null)-(b.sort_order==null)||(a.sort_order??0)-(b.sort_order??0)||(a.item_type||"").localeCompare(b.item_type||"")||a.code.localeCompare(b.code);
+// 우선순위: (직접 올림) → 이월 → 가장 뒤처진 컨셉 → 중요 표시 → 갤러리에서 정한 순서(같은 품목·비슷한 것끼리 연달아)
 function recommendOrder(s,st,carried){
   const ratio={};st.concepts.forEach(x=>ratio[x.c.id]=x.target?x.done/x.target:1);
-  const lt=lastType(s),carriedSet=new Set(carried);
+  const carriedSet=new Set(carried);
   const conceptRank={};[...st.concepts].sort((a,b)=>(ratio[a.c.id]-ratio[b.c.id])||(b.remaining-a.remaining)).forEach((x,n)=>conceptRank[x.c.id]=n);
-  const key=i=>[i.pinned_at?0:1,i.pinned_at?-Date.parse(i.pinned_at):0,carriedSet.has(i.id)?0:1,conceptRank[i.concept_id]??99,i.item_type===lt&&lt?0:1,i.item_type||"",i.important?0:1,i.code];
+  const pos=new Map(itemsOf(s.id).sort(galleryCmp).map((i,n)=>[i.id,n]));
+  const key=i=>[i.pinned_at?0:1,i.pinned_at?-Date.parse(i.pinned_at):0,carriedSet.has(i.id)?0:1,conceptRank[i.concept_id]??99,i.important?0:1,pos.get(i.id)];
   const cmp=(a,b)=>{const x=key(a),y=key(b);for(let n=0;n<x.length;n++){if(x[n]<y[n])return-1;if(x[n]>y[n])return 1}return 0};
   return itemsOf(s.id).filter(i=>!isDone(i)).sort(cmp);
 }
@@ -275,41 +279,67 @@ async function uploadThumb(itemId,blob){
 }
 const isDesign=f=>/\.(ai|pdf)$/i.test(f.name);
 const isImage=f=>/^image\//.test(f.type)||/\.(png|jpe?g|webp|heic)$/i.test(f.name);
-async function fileToCanvas(f){return isDesign(f)?renderPdf(f):renderImage(f)}
+// 폴더째 올리면 파일이 들어 있던 폴더 이름(예: "6-1p 클로버 노바")을 컨셉으로 쓴다
+const fileDir=new WeakMap();
+const folderOf=f=>fileDir.get(f)||(f.webkitRelativePath||"").split("/").slice(0,-1).pop()||"";
+const withTimeout=(p,ms,msg)=>Promise.race([p,new Promise((_,rej)=>setTimeout(()=>rej(new Error(msg)),ms))]);
+async function fileToCanvas(f){return withTimeout(isDesign(f)?renderPdf(f):renderImage(f),90000,"파일을 그리는 데 너무 오래 걸려요")}
+// 다시 저장한 파일을 올리면 새 버전으로 보고 완료 추정을 다시 한다 (확인 표시는 풀림)
+function applyEstimate(item,est,file,prev){
+  item.auto_done=!est.hasForm;item.auto_score=est.score;item.confirmed=false;
+  item.status=est.hasForm?"todo":"done";
+  item.completed_at=est.hasForm?null:(prev&&isDone(prev)&&prev.completed_at?prev.completed_at:new Date(file.lastModified||Date.now()).toISOString());
+  return item;
+}
+// 파일명 시즌(27SS) → 같은 이름 시즌 → 그 이름으로 시작하는 시즌(27SS2차) → 없으면 지금 시즌 마감일을 물려받아 새로 만든다
+async function seasonForFile(token,cur){
+  if(!token)return cur;
+  if(cur&&cur.name.toUpperCase()===token)return cur;
+  const all=TR.data.seasons;
+  let s=all.find(x=>x.name.toUpperCase()===token)||(cur&&cur.name.toUpperCase().startsWith(token)?cur:null)||all.find(x=>x.name.toUpperCase().startsWith(token));
+  if(!s){
+    s={id:token,name:token,deadline:cur?.deadline||null,review_days:cur?.review_days??1,start_date:todayISO(),holidays:cur?.holidays||[],settings:{},active:true};
+    await put({seasons:[s]});s=byId("seasons",s.id);
+    toast(`${token} 시즌을 새로 만들었어요. 설정에서 마감일을 확인해 주세요.`,5000);
+  }
+  return s;
+}
 async function importFiles(files){
   if(!guardOnline())return;
   files=files.filter(f=>isDesign(f)||isImage(f));
   if(!files.length){toast(".ai / .pdf / 이미지 파일만 등록할 수 있어요.");return}
   let s=season();
-  const report={added:0,updated:0,failed:[]};
+  const report={added:0,updated:0,failed:[],errors:[]},left=new Set();
   for(let n=0;n<files.length;n++){
     const f=files[n];TR.progress=`${n+1}/${files.length} · ${f.name}`;render();
-    const p=parseName(f.name);
-    // 시즌: 파일명 앞부분(27SS)과 같은 시즌, 없으면 새로 만든다(마감일은 설정에서)
-    if(p.season&&(!s||s.name.toUpperCase()!==p.season)){
-      s=TR.data.seasons.find(x=>x.name.toUpperCase()===p.season)||null;
-      if(!s){s={id:p.season,name:p.season,deadline:null,review_days:1,start_date:todayISO(),holidays:[],settings:{},active:true};await put({seasons:[s]});s=byId("seasons",s.id)}
-      TR.seasonId=s.id;saveUI();
-    }
-    if(!s){toast("먼저 시즌을 만들어 주세요.");break}
-    const cid=`${s.id}:${p.concept}`,rows={concepts:[],items:[]};
-    if(!byId("concepts",cid))rows.concepts.push({id:cid,season_id:s.id,name:p.concept,target:null,sort:100});
-    const id=`${s.id}_${p.concept}_${p.code}`,prev=byId("items",id);
-    let canvas=null,est=null;
-    try{canvas=await fileToCanvas(f);if(isDesign(f))est=detectForm(canvas)}catch(e){console.warn(e);report.failed.push(f.name)}
-    const item={...(prev||{id,season_id:s.id,concept_id:cid,code:p.code,item_type:itemTypeOf(p.code),difficulty:"M",important:false,pinned_at:null,status:"todo",confirmed:false,completed_at:null,note:null,auto_done:null,auto_score:null}),file_name:f.name};
-    if(est){
-      item.auto_done=!est.hasForm;item.auto_score=est.score;
-      if(!item.confirmed){item.status=est.hasForm?"todo":"done";item.completed_at=est.hasForm?null:(prev?.completed_at||new Date(f.lastModified||Date.now()).toISOString())}
-    }
-    rows.items.push(item);
-    if(!(await put(rows)))break;
-    prev?report.updated++:report.added++;
-    if(canvas){try{await uploadThumb(id,await toThumb(canvas))}catch(e){report.failed.push(f.name)}}
+    try{
+      const p=parseName(f.name);
+      s=await seasonForFile(p.season,s);
+      if(!s){toast("먼저 시즌을 만들어 주세요.");break}
+      if(TR.seasonId!==s.id){TR.seasonId=s.id;saveUI()}
+      // 같은 시즌에 같은 품목 코드가 있으면 그 카드를 새 버전으로 갱신 (컨셉이 바뀌어도 중복 생성 안 함)
+      const prev=byId("items",`${s.id}_${p.concept}_${p.code}`)||itemsOf(s.id).find(i=>i.code===p.code);
+      const dir=folderOf(f),cname=dir||p.concept,cid=`${s.id}:${slug(cname)}`;
+      const conceptId=dir||!prev?cid:prev.concept_id,rows={concepts:[],items:[]};
+      if(conceptId===cid&&!byId("concepts",cid))rows.concepts.push({id:cid,season_id:s.id,name:cname,target:null,sort:100});
+      if(prev&&prev.concept_id!==conceptId)left.add(prev.concept_id);
+      const id=prev?.id||`${s.id}_${p.code}`;
+      let canvas=null,est=null;
+      try{canvas=await fileToCanvas(f);if(isDesign(f))est=detectForm(canvas)}catch(e){console.warn(e);report.failed.push(f.name)}
+      const item={...(prev||{id,season_id:s.id,code:p.code,item_type:itemTypeOf(p.code),difficulty:"M",important:false,pinned_at:null,status:"todo",confirmed:false,completed_at:null,note:null,auto_done:null,auto_score:null,sort_order:null}),concept_id:conceptId,file_name:f.name};
+      if(est)applyEstimate(item,est,f,prev);
+      rows.items.push(item);
+      if(!(await put(rows))){report.errors.push(f.name);break}
+      prev?report.updated++:report.added++;
+      if(canvas)await uploadThumb(id,await toThumb(canvas));
+    }catch(e){console.warn(e);report.errors.push(`${f.name}: ${e.message}`)}
   }
+  // 폴더 기준으로 옮기고 나서 비어 버린 자동 컨셉(목표 미지정)은 정리
+  for(const cid of left){const c=byId("concepts",cid);if(c&&c.target==null&&!TR.data.items.some(i=>i.concept_id===cid)){if(TR.conceptTab===cid)TR.conceptTab="all";await remove("concepts",cid)}}
   TR.progress="";render();
-  const msg=[report.added&&`${report.added}건 등록`,report.updated&&`${report.updated}건 갱신`].filter(Boolean).join(" · ")||"변경 없음";
-  toast(report.failed.length?`${msg} · 썸네일 실패 ${report.failed.length}건 (PDF 호환이 꺼진 파일이면 스크린샷을 ⌘V로 붙여넣어 주세요)`:msg,report.failed.length?6000:2600);
+  const msg=[report.added&&`${report.added}건 등록`,report.updated&&`${report.updated}건 새 버전으로 갱신`].filter(Boolean).join(" · ")||"변경 없음";
+  if(report.errors.length)toast(`⚠️ 저장 실패 ${report.errors.length}건 · ${report.errors[0]}`,8000);
+  else toast(report.failed.length?`${msg} · 썸네일 실패 ${report.failed.length}건 (PDF 호환이 꺼진 파일이면 스크린샷을 ⌘V로 붙여넣어 주세요)`:msg,report.failed.length?6000:2600);
 }
 async function replaceThumb(itemId,file){
   if(!guardOnline())return;
@@ -317,9 +347,9 @@ async function replaceThumb(itemId,file){
   TR.progress=`썸네일 교체 · ${it.code}`;render();
   try{
     const canvas=await fileToCanvas(file);
-    if(isDesign(file)&&!it.confirmed){const est=detectForm(canvas);await put({items:[{...it,auto_done:!est.hasForm,auto_score:est.score,status:est.hasForm?"todo":"done",completed_at:est.hasForm?null:(it.completed_at||nowISO())}]})}
-    await uploadThumb(itemId,await toThumb(canvas));toast("썸네일을 바꿨어요.");
-  }catch(e){console.warn(e);toast("이 파일로는 썸네일을 만들지 못했어요.")}
+    if(isDesign(file))await put({items:[applyEstimate({...it,file_name:file.name},detectForm(canvas),file,it)]});
+    await uploadThumb(itemId,await toThumb(canvas));toast(`${it.code} 새 버전으로 바꿨어요.`);
+  }catch(e){console.warn(e);toast(`⚠️ 이 파일로는 바꾸지 못했어요 · ${e.message}`,6000)}
   TR.progress="";render();
 }
 async function filesFromDrop(dt){
@@ -327,11 +357,83 @@ async function filesFromDrop(dt){
   if(!entries.length)return [...dt.files];
   const out=[];
   const walk=async e=>{
-    if(e.isFile)await new Promise(r=>e.file(f=>{out.push(f);r()},()=>r()));
+    if(e.isFile)await new Promise(r=>e.file(f=>{const dir=e.fullPath.split("/").slice(0,-1).pop();if(dir)fileDir.set(f,dir);out.push(f);r()},()=>r()));
     else if(e.isDirectory){const rd=e.createReader();let batch;do{batch=await new Promise(r=>rd.readEntries(r,()=>r([])));for(const x of batch)await walk(x)}while(batch.length)}
   };
   for(const e of entries)await walk(e);
   return out;
+}
+
+/* ---------- 갤러리 정렬 (끌어서 옮기기 · 비슷한 것끼리) ---------- */
+const SORTABLE_JS="https://cdnjs.cloudflare.com/ajax/libs/Sortable/1.15.2/Sortable.min.js";
+let sortableP=null,sortables=[];
+function loadSortable(){return sortableP??=new Promise((res,rej)=>{const sc=document.createElement("script");sc.src=SORTABLE_JS;sc.onload=()=>res(window.Sortable);sc.onerror=()=>{sortableP=null;rej(new Error("Sortable을 불러오지 못했어요"))};document.head.appendChild(sc)})}
+async function bindSortables(){
+  sortables.forEach(x=>x.destroy());sortables=[];
+  const lists=[...main.querySelectorAll(".tr-grid[data-list]")];if(!lists.length)return;
+  let Sortable;try{Sortable=await loadSortable()}catch(e){console.warn(e);return}
+  if(!lists[0].isConnected)return;
+  sortables=lists.map(el=>Sortable.create(el,{group:"tr-gallery",animation:150,delay:220,delayOnTouchOnly:true,touchStartThreshold:5,draggable:".tr-card-item",filter:".tr-statebtn",preventOnFilter:false,ghostClass:"tr-ghost",chosenClass:"tr-chosen",onStart:()=>{TR.dragging=true},onEnd:onCardDrop}));
+}
+// 모든 카드에 서로 다른 sort_order를 매겨 둔다 (처음 끌 때 한 번)
+function normalizeOrder(s){
+  const all=itemsOf(s.id).sort(galleryCmp),rows=[];
+  if(all.every(i=>i.sort_order!=null)&&new Set(all.map(i=>i.sort_order)).size===all.length)return rows;
+  all.forEach((i,n)=>{const v=(n+1)*1024;if(i.sort_order!==v){i.sort_order=v;rows.push(i)}});
+  return rows;
+}
+async function onCardDrop(evt){
+  TR.dragging=false;
+  const id=evt.item.dataset.item,from=evt.from.dataset.list,to=evt.to.dataset.list,it=byId("items",id),s=season();
+  if(!it||!s||(from===to&&evt.oldIndex===evt.newIndex)){render();return}
+  const changed=new Map(normalizeOrder(s).map(r=>[r.id,r]));
+  // 완료 칸으로 옮기면 완료 처리 (완료 칸은 완료 시각 순이라 위치는 따로 저장하지 않는다)
+  if(to==="done"){if(changed.size)await put({items:[...changed.values()]});if(!isDone(it))await setDone(id,true);else render();return}
+  const ids=[...evt.to.querySelectorAll("[data-item]")].map(x=>x.dataset.item),k=ids.indexOf(id);
+  const prev=byId("items",ids[k-1]),next=byId("items",ids[k+1]);
+  const so=prev&&next?(prev.sort_order+next.sort_order)/2:prev?prev.sort_order+1024:next?next.sort_order-1024:it.sort_order;
+  const row={...it,sort_order:so,difficulty:to};
+  if(from==="done"){row.status="todo";row.completed_at=null;row.confirmed=true}
+  changed.set(id,row);
+  await put({items:[...changed.values()]});
+}
+// 썸네일 특징: 색 분포(흰 배경 제외) + 왼쪽 의뢰서 칸의 밝기 배치
+async function thumbFeatures(it){
+  const blob=await (await fetch(TR.thumbs[it.id],{mode:"cors"})).blob(),im=await createImageBitmap(blob);
+  const w=64,h=Math.max(1,Math.round(im.height*w/im.width)),c=document.createElement("canvas");c.width=w;c.height=h;
+  const ctx=c.getContext("2d",{willReadFrequently:true});ctx.drawImage(im,0,0,w,h);
+  const px=ctx.getImageData(0,0,w,h).data,hist=new Float32Array(64);let n=0;
+  for(let o=0;o<px.length;o+=4){const r=px[o],g=px[o+1],b=px[o+2];if(r>235&&g>235&&b>235)continue;hist[(r>>6)*16+(g>>6)*4+(b>>6)]++;n++}
+  if(n)for(let i=0;i<64;i++)hist[i]/=n;
+  const gw=12,gh=10,g2=document.createElement("canvas");g2.width=gw;g2.height=gh;
+  const x2=g2.getContext("2d",{willReadFrequently:true});x2.drawImage(im,0,0,im.width/2,im.height,0,0,gw,gh);
+  const p2=x2.getImageData(0,0,gw,gh).data,lay=new Float32Array(gw*gh);let mean=0,norm=0;
+  for(let i=0;i<lay.length;i++){lay[i]=(p2[i*4]+p2[i*4+1]+p2[i*4+2])/765;mean+=lay[i]}mean/=lay.length;
+  for(let i=0;i<lay.length;i++){lay[i]-=mean;norm+=lay[i]*lay[i]}norm=Math.sqrt(norm)||1;for(let i=0;i<lay.length;i++)lay[i]/=norm;
+  im.close?.();
+  return {hist,lay};
+}
+function featDist(a,b){let h=0,dot=0;for(let i=0;i<64;i++)h+=Math.abs(a.hist[i]-b.hist[i]);for(let i=0;i<a.lay.length;i++)dot+=a.lay[i]*b.lay[i];return h/2+(1-dot)/2}
+// 난이도 칸마다 비슷한 썸네일이 옆에 오도록 순서를 다시 매긴다 (가까운 것부터 이어 붙이기)
+async function arrangeSimilar(){
+  if(!guardOnline())return;
+  const s=season();if(!s)return;
+  const tab=TR.conceptTab,changed=new Map(normalizeOrder(s).map(r=>[r.id,r]));
+  let moved=0;TR.progress="비슷한 것끼리 정리 중";render();
+  try{
+    for(const [k] of DIFF){
+      const list=itemsOf(s.id).filter(i=>!isDone(i)&&(i.difficulty||"M")===k&&(tab==="all"||i.concept_id===tab)).sort(galleryCmp);
+      const feats=new Map();
+      for(const it of list)if(TR.thumbs[it.id]){try{feats.set(it.id,await thumbFeatures(it))}catch(e){console.warn(e)}}
+      const pool=list.filter(i=>feats.has(i.id));if(pool.length<3)continue;
+      const chain=[pool[0]],rest=new Set(pool.slice(1));
+      while(rest.size){const last=feats.get(chain[chain.length-1].id);let best=null,bd=Infinity;for(const c of rest){const dd=featDist(last,feats.get(c.id));if(dd<bd){bd=dd;best=c}}chain.push(best);rest.delete(best)}
+      const seq=[...chain,...list.filter(i=>!feats.has(i.id))],slots=list.map(i=>i.sort_order).sort((a,b)=>a-b);
+      seq.forEach((it,n)=>{if(it.sort_order!==slots[n]){changed.set(it.id,{...(changed.get(it.id)||it),sort_order:slots[n]});moved++}});
+    }
+  }finally{TR.progress=""}
+  if(changed.size)await put({items:[...changed.values()]});else render();
+  toast(moved?"비슷한 것끼리 옆에 붙였어요. 마음에 안 들면 끌어서 바꿔요.":"바꿀 게 없었어요. 같은 난이도 칸에 썸네일 있는 카드가 3개 이상일 때 정리돼요.",4500);
 }
 
 /* ---------- 화면 ---------- */
@@ -343,12 +445,14 @@ const RISK={none:["–",""],done:["완료","done"],ok:["정상","ok"],warn:["주
 
 function build(){
   root=document.createElement("div");root.id="tracker";root.className="tr";root.hidden=true;
-  root.innerHTML=`<div class="tr-wrap"><header class="tr-top"><div class="tr-head"><button class="tr-back" data-act="close" aria-label="비서로 돌아가기">‹ 비서</button><h2>🎯 마감 트래커</h2><span class="tr-state" id="tr-state"></span></div><nav class="tr-tabs">${[["today","오늘"],["season","시즌"],["log","기록"],["settings","설정"]].map(([k,l])=>`<button data-view="${k}">${l}</button>`).join("")}</nav></header><main id="tr-main"></main></div><div class="tr-dropzone" aria-hidden="true"><div>여기에 놓으면 등록돼요<small>.ai · .pdf · 폴더</small></div></div><dialog id="tr-sheet" class="tr-sheet"></dialog><input type="file" id="tr-file" multiple accept=".ai,.pdf,image/*" hidden><input type="file" id="tr-thumb-file" accept=".ai,.pdf,image/*" hidden><div class="tr-toast" role="status"></div>`;
+  root.innerHTML=`<div class="tr-wrap"><header class="tr-top"><div class="tr-head"><button class="tr-back" data-act="close" aria-label="비서로 돌아가기">‹ 비서</button><h2>🎯 마감 트래커</h2><span class="tr-state" id="tr-state"></span></div><nav class="tr-tabs">${[["today","오늘"],["season","시즌"],["log","기록"],["settings","설정"]].map(([k,l])=>`<button data-view="${k}">${l}</button>`).join("")}</nav></header><main id="tr-main"></main></div><div class="tr-dropzone" aria-hidden="true"><div>여기에 놓으면 등록돼요<small>.ai · .pdf · 폴더</small></div></div><dialog id="tr-sheet" class="tr-sheet"></dialog><input type="file" id="tr-file" multiple accept=".ai,.pdf,image/*" hidden><input type="file" id="tr-folder" webkitdirectory multiple hidden><input type="file" id="tr-thumb-file" accept=".ai,.pdf,image/*" hidden><div class="tr-toast" role="status"></div>`;
   document.body.appendChild(root);
   main=root.querySelector("#tr-main");sheet=root.querySelector("#tr-sheet");
   root.addEventListener("click",onClick);
   root.addEventListener("change",onChange);
   root.querySelector("#tr-file").onchange=e=>{importFiles([...e.target.files]);e.target.value=""};
+  root.querySelector("#tr-folder").onchange=e=>{importFiles([...e.target.files]);e.target.value=""};
+  root.addEventListener("keydown",e=>{if(e.key==="Enter"&&e.target.matches?.("[data-open][role=button]"))openSheet(e.target.dataset.open)});
   root.querySelector("#tr-thumb-file").onchange=e=>{const f=e.target.files[0];if(f&&TR.detail)replaceThumb(TR.detail,f);e.target.value=""};
   sheet.addEventListener("close",()=>{TR.detail=null});
   sheet.addEventListener("click",e=>{if(e.target===sheet)sheet.close()});
@@ -383,7 +487,7 @@ function closeTracker(){TR.open=false;if(root)root.hidden=true;document.body.cla
 function updateTimers(){const x=activeSession();root.querySelectorAll("[data-tick]").forEach(el=>{el.textContent=x?mmss(elapsedMs(x)):"00:00"})}
 
 function render(){
-  if(!root||!TR.open)return;
+  if(!root||!TR.open||TR.dragging)return;
   root.querySelectorAll("[data-view]").forEach(b=>b.classList.toggle("on",b.dataset.view===TR.view));
   const state=root.querySelector("#tr-state");
   state.textContent=TR.progress?`⏳ ${TR.progress}`:TR.offline?"오프라인 · 마지막 내용":TR.loaded?"":"불러오는 중";
@@ -393,6 +497,8 @@ function render(){
   const s=season();
   if(!s&&TR.view!=="settings"){main.innerHTML=seasonSetup();return}
   main.innerHTML=TR.view==="season"?viewSeason(s):TR.view==="log"?viewLog(s):TR.view==="settings"?viewSettings(s):viewToday(s);
+  root.style.setProperty("--tr-top-h",root.querySelector(".tr-top").offsetHeight+"px");
+  if(TR.view==="season")bindSortables();else if(sortables.length){sortables.forEach(x=>x.destroy());sortables=[]}
   updateTimers();
   if(TR.detail&&sheet.open)renderSheet();
 }
@@ -432,17 +538,34 @@ function viewToday(s){
   <section class="section"><div class="section-title"><h3>${p.workday?"오늘 할 의뢰서":"다음에 할 의뢰서"}</h3><span><button class="tr-link" data-act="one-only">${TR.oneOnly?"전체 보기":"다음 하나만"}</button></span></div><div class="tr-list">${shown.length?shown.map(it=>itemRow(it,p,s)).join(""):`<div class="empty">${p.st.target?"남은 의뢰서가 없어요.":"아직 등록된 의뢰서가 없어요."}</div>`}${TR.oneOnly&&todoItems.length>1?`<div class="tr-more">+ ${todoItems.length-1}건은 숨겨 뒀어요</div>`:""}</div></section>
   <section class="section"><div class="section-title"><h3>오늘 완료 기록</h3><span>${p.doneToday.length}건</span></div><div class="tr-list">${p.doneToday.length?[...p.doneToday].sort((a,b)=>(b.completed_at||"").localeCompare(a.completed_at||"")).map(it=>itemRow(it,p,s)).join(""):`<div class="empty">아직 완료한 의뢰서가 없어요.</div>`}</div></section>`;
 }
+const DIFF=[["S","쉬움"],["M","중간"],["L","어려움"]];
+const DIFF_LABEL=Object.fromEntries(DIFF);
+const ZOOMS=[120,160,220,300,420];
+function galleryCard(it,s){
+  const guess=it.auto_done!=null&&!it.confirmed;
+  return `<div class="tr-card-item ${isDone(it)?"done":""}" data-item="${esc(it.id)}" data-open="${esc(it.id)}" role="button" tabindex="0"><div class="tr-card-thumb">${thumbHTML(it)}${it.important?`<span class="tr-badge star">⭐</span>`:""}<button class="tr-statebtn ${isDone(it)?"is-done":""} ${guess?"guess":""}" data-tdone="${esc(it.id)}" data-tundo="${isDone(it)?1:""}" title="${isDone(it)?"누르면 미완료로":"누르면 완료로"}">${guess?"🤖 ":""}${isDone(it)?"완료":"미완료"}${guess?"?":""}</button></div><span class="tr-card-label">${esc(it.code)}${it.item_type&&typeName(s,it.item_type)?` <small>${esc(typeName(s,it.item_type))}</small>`:""}</span></div>`;
+}
+function gallerySection(key,label,list,s,hint){
+  const closed=!!TR.collapsed[key];
+  return `<section class="tr-dsec ${closed?"closed":""}" data-sec="${key}"><button class="tr-dsec-head" data-collapse="${key}" aria-expanded="${!closed}"><span class="tr-caret">▾</span><b>${label}</b><span>${list.length}건</span>${hint?`<em>${hint}</em>`:""}</button><div class="tr-grid" data-list="${key}">${list.map(it=>galleryCard(it,s)).join("")}${list.length?"":`<div class="tr-grid-empty">여기로 끌어다 놓기</div>`}</div></section>`;
+}
+function viewGallery(s,items){
+  const tab=TR.conceptTab,shown=items.filter(i=>tab==="all"||i.concept_id===tab).sort(galleryCmp);
+  const pending=shown.filter(i=>!isDone(i)),done=shown.filter(isDone);
+  return `<section class="section tr-gallery" data-zoom="${TR.zoom}" style="--tr-card:${ZOOMS[TR.zoom-1]||160}px">
+  <div class="tr-menubar"><div class="tr-ctabs"><button data-ctab="all" class="${tab==="all"?"on":""}">전체 ${items.length}</button>${conceptsOf(s.id).map(c=>`<button data-ctab="${esc(c.id)}" class="${tab===c.id?"on":""}">${esc(c.name)} ${items.filter(i=>i.concept_id===c.id).length}</button>`).join("")}</div>
+  <div class="tr-tools"><button class="tr-btn sm" data-act="similar" title="썸네일이 비슷한 의뢰서끼리 옆에 붙여요">🧩 비슷한 것끼리</button><div class="tr-zoom" role="group" aria-label="썸네일 크기"><button data-zoom="-1" ${TR.zoom<=1?"disabled":""} aria-label="작게">−</button><span>🔍 ${TR.zoom}</span><button data-zoom="1" ${TR.zoom>=ZOOMS.length?"disabled":""} aria-label="크게">＋</button></div></div></div>
+  ${shown.length?`${DIFF.map(([k,l])=>gallerySection(k,l,pending.filter(i=>(i.difficulty||"M")===k),s)).join("")}${gallerySection("done","✓ 완료",done.sort((a,b)=>(b.completed_at||"").localeCompare(a.completed_at||"")),s,"카드를 여기로 끌어도 완료돼요")}`:`<div class="empty">아직 의뢰서가 없어요.</div>`}
+  <p class="tr-sub tr-gallery-tip">카드를 끌어서 순서·난이도를 바꿔요 (폰은 길게 누른 뒤 끌기). 오른쪽 아래 버튼으로 완료/미완료를 바꿔요.</p></section>`;
+}
 function viewSeason(s){
-  const st=seasonStats(s),items=itemsOf(s.id),tab=TR.conceptTab;
-  const shown=items.filter(i=>tab==="all"||i.concept_id===tab);
+  const st=seasonStats(s),items=itemsOf(s.id);
   const unconfirmed=items.filter(i=>i.auto_done!=null&&!i.confirmed);
-  const groups={};shown.forEach(i=>(groups[i.item_type||"기타"]??=[]).push(i));
   return `<section class="card tr-card tr-stats"><div class="tr-stat"><small>마감</small><b>${st.dday==null?"미정":st.dday>0?"D-"+st.dday:st.dday===0?"D-DAY":"D+"+(-st.dday)}</b><span>${s.deadline?md(s.deadline):"설정에서 지정"}</span></div><div class="tr-stat"><small>남은 제작일</small><b>${st.left}일</b><span>${st.end?"제작 마감 "+md(st.end):"–"}</span></div><div class="tr-stat"><small>완료 / 전체</small><b>${st.done} / ${st.target}</b><span>남음 ${st.remaining}</span></div><div class="tr-stat"><small>하루 필요량</small><b>${st.end?st.need+"건":"–"}</b><span>${st.overdue?"⚠️ 마감 초과":st.remaining?"남은 ÷ 제작일":"🎉 완료"}</span></div></section>
   <section class="section"><div class="section-title"><h3>컨셉별 진행</h3><span>기대 진행률 ${Math.round(st.expected*100)}%</span></div><div class="tr-gauges">${st.concepts.length?st.concepts.map(x=>`<button class="card tr-gauge ${RISK[x.risk][1]}" data-target="${esc(x.c.id)}" title="목표 개수 바꾸기"><div class="tr-gauge-head"><b>${esc(x.c.name)}</b><span>${x.done}/${x.target} · ${Math.round(x.ratio*100)}%</span><em>${RISK[x.risk][0]}</em></div><div class="tr-bar"><i style="width:${Math.round(x.ratio*100)}%"></i><s style="left:${Math.round(st.expected*100)}%"></s></div></button>`).join(""):`<div class="empty">파일을 등록하면 파일명에서 컨셉을 자동으로 만들어요.</div>`}</div></section>
-  <section class="tr-drop-card"><div><b>의뢰서 등록</b><span>.ai 여러 개나 폴더를 이 화면에 끌어다 놓기 · 카드 위에 놓으면 썸네일 교체</span></div><button class="tr-btn primary" data-act="pick">파일 선택</button></section>
-  ${unconfirmed.length?`<section class="card tr-card tr-confirm"><div><b>🤖 자동 추정 확인 ${unconfirmed.length}건</b><span class="tr-sub">썸네일 왼쪽 위 노란 의뢰서 표가 있으면 미완료로 봤어요. 틀린 건 카드를 눌러 고쳐 주세요.</span></div><button class="tr-btn" data-act="confirm-all">모두 맞음</button></section>`:""}
-  <section class="section"><div class="tr-ctabs"><button data-ctab="all" class="${tab==="all"?"on":""}">전체 ${items.length}</button>${conceptsOf(s.id).map(c=>`<button data-ctab="${esc(c.id)}" class="${tab===c.id?"on":""}">${esc(c.name)} ${items.filter(i=>i.concept_id===c.id).length}</button>`).join("")}</div>
-  ${Object.keys(groups).length?Object.keys(groups).sort().map(t=>`<div class="tr-group"><h4>${esc(t)}${typeName(s,t)?` · ${esc(typeName(s,t))}`:""} <span>${groups[t].filter(isDone).length}/${groups[t].length}</span></h4><div class="tr-grid">${groups[t].sort((a,b)=>a.code.localeCompare(b.code)).map(it=>`<button class="tr-card-item ${isDone(it)?"done":""}" data-item="${esc(it.id)}" data-open="${esc(it.id)}">${thumbHTML(it)}<span class="tr-card-label">${isDone(it)?"✓ ":""}${esc(it.code)}</span>${it.auto_done!=null&&!it.confirmed?`<span class="tr-badge">🤖 ${it.auto_done?"완료?":"미완료?"}</span>`:""}${it.important?`<span class="tr-badge star">⭐</span>`:""}</button>`).join("")}</div></div>`).join(""):`<div class="empty">아직 의뢰서가 없어요.</div>`}</section>`;
+  <section class="tr-drop-card"><div><b>의뢰서 등록</b><span>폴더째 끌어다 놓으면 폴더 이름이 컨셉이 돼요 · 다시 저장한 파일을 올리면 새 버전으로 바뀌어요</span></div><div class="tr-drop-btns"><button class="tr-btn" data-act="pick-folder">폴더 선택</button><button class="tr-btn primary" data-act="pick">파일 선택</button></div></section>
+  ${unconfirmed.length?`<section class="card tr-card tr-confirm"><div><b>🤖 자동 추정 확인 ${unconfirmed.length}건</b><span class="tr-sub">썸네일 왼쪽 위 노란 의뢰서 표가 있으면 미완료로 봤어요. 틀린 건 카드 오른쪽 아래 버튼으로 바꿔 주세요.</span></div><button class="tr-btn" data-act="confirm-all">모두 맞음</button></section>`:""}
+  ${viewGallery(s,items)}`;
 }
 function viewLog(s){
   const items=itemsOf(s.id).filter(isDone).sort((a,b)=>(b.completed_at||"").localeCompare(a.completed_at||""));
@@ -469,11 +592,11 @@ function renderSheet(){
   const s=byId("seasons",it.season_id),act=activeSession();
   const ss=TR.data.sessions.filter(x=>x.item_id===it.id).sort((a,b)=>b.started_at.localeCompare(a.started_at));
   const total=ss.reduce((a,x)=>a+(x.ended_at?x.focus_sec||0:Math.round(elapsedMs(x)/1000)),0);
-  sheet.innerHTML=`<div class="tr-sheet-body"><button class="tr-sheet-close" data-act="sheet-close" aria-label="닫기">✕</button>${thumbHTML(it,"full")}<h3>${esc(it.code)}</h3><p class="tr-sub">${esc(conceptName(it.concept_id))}${it.item_type?" · "+esc(typeName(s,it.item_type)||it.item_type):""}${it.file_name?" · "+esc(it.file_name):""}</p>
+  sheet.innerHTML=`<div class="tr-sheet-body"><button class="tr-sheet-close" data-act="sheet-close" aria-label="닫기">✕</button>${thumbHTML(it,"full")}<h3>${esc(it.code)}</h3><p class="tr-sub">${it.item_type?esc(typeName(s,it.item_type)||it.item_type):""}${it.file_name?" · "+esc(it.file_name):""}</p><label class="tr-inline tr-concept-pick">컨셉<select data-change="concept" data-id="${esc(it.id)}">${conceptsOf(it.season_id).map(c=>`<option value="${esc(c.id)}" ${c.id===it.concept_id?"selected":""}>${esc(c.name)}</option>`).join("")}</select></label>
   ${it.auto_done!=null&&!it.confirmed?`<div class="tr-autoline">🤖 자동 추정: <b>${it.auto_done?"완료":"미완료"}</b> <button class="tr-btn sm" data-confirm="${esc(it.id)}">맞아요</button><button class="tr-btn sm ghost" data-flip="${esc(it.id)}">아니에요</button></div>`:""}
   <div class="tr-actions">${isDone(it)?`<button class="tr-btn" data-tdone="${esc(it.id)}" data-tundo="1">↩ 완료 취소</button>`:`<button class="tr-btn primary" data-focus="${esc(it.id)}" ${act?.item_id===it.id?"disabled":""}>${act?.item_id===it.id?"집중 중":"▶ 집중 시작"}</button><button class="tr-btn" data-tdone="${esc(it.id)}">✓ 완료</button>`}</div>
   ${isDone(it)?`<p class="tr-sub">✓ ${md(dayOf(it.completed_at))} ${esc(recordLine(it))}</p>`:""}
-  <div class="tr-opts"><button class="tr-chip-btn ${it.important?"on":""}" data-important="${esc(it.id)}">⭐ 중요</button>${isDone(it)?"":`<button class="tr-chip-btn ${it.pinned_at?"on":""}" data-pin="${esc(it.id)}">${it.pinned_at?"⬆ 맨 위 고정됨":"⬆ 맨 위로"}</button>`}<span class="tr-diff">${["S","M","L"].map(d=>`<button class="tr-chip-btn ${it.difficulty===d?"on":""}" data-diff="${d}" data-id="${esc(it.id)}">${d}</button>`).join("")}</span></div>
+  <div class="tr-opts"><button class="tr-chip-btn ${it.important?"on":""}" data-important="${esc(it.id)}">⭐ 중요</button>${isDone(it)?"":`<button class="tr-chip-btn ${it.pinned_at?"on":""}" data-pin="${esc(it.id)}">${it.pinned_at?"⬆ 맨 위 고정됨":"⬆ 맨 위로"}</button>`}<span class="tr-diff">${["S","M","L"].map(d=>`<button class="tr-chip-btn ${it.difficulty===d?"on":""}" data-diff="${d}" data-id="${esc(it.id)}">${DIFF_LABEL[d]}</button>`).join("")}</span></div>
   <div class="tr-sessions"><b>집중 기록</b> <span class="tr-sub">누적 ${Math.round(total/60)}분 · ${ss.length}회</span>${ss.slice(0,8).map(x=>`<div class="tr-sub">${md(dayOf(x.started_at))} ${hm(x.started_at)} ~ ${x.ended_at?hm(x.ended_at)+" · "+Math.round((x.focus_sec||0)/60)+"분":"진행 중"}</div>`).join("")}</div>
   <div class="tr-actions tr-sheet-foot"><button class="tr-btn sm" data-act="thumb-pick">썸네일 교체</button><span class="tr-sub">최종본을 카드에 끌어다 놓거나 ⌘V로 붙여넣어도 돼요</span><button class="tr-btn sm ghost danger" data-del-item="${esc(it.id)}">삭제</button></div></div>`;
 }
@@ -481,10 +604,12 @@ function openSheet(id){TR.detail=id;renderSheet();if(!sheet.open)sheet.showModal
 
 /* ---------- 이벤트 ---------- */
 async function onClick(e){
-  const b=e.target.closest("button");if(!b||!root.contains(b))return;
+  const b=e.target.closest("button,[data-open]");if(!b||!root.contains(b))return;
   const d=b.dataset;
   if(d.view){TR.view=d.view;saveUI();if(sheet.open)sheet.close();render();main.scrollTo?.(0,0);return}
   if(d.ctab){TR.conceptTab=d.ctab;saveUI();render();return}
+  if(d.zoom){TR.zoom=Math.min(ZOOMS.length,Math.max(1,TR.zoom+Number(d.zoom)));saveUI();render();return}
+  if(d.collapse){TR.collapsed[d.collapse]=!TR.collapsed[d.collapse];saveUI();render();return}
   if(d.open&&!e.target.closest("[data-tdone],[data-focus]")){openSheet(d.open);return}
   if(d.focus){if(sheet.open)sheet.close();await startFocus(d.focus);return}
   if(d.tdone){e.stopPropagation();await setDone(d.tdone,!d.tundo);return}
@@ -507,13 +632,19 @@ async function onClick(e){
     case"skip":TR.skip++;render();break;
     case"one-only":TR.oneOnly=!TR.oneOnly;saveUI();render();break;
     case"pick":root.querySelector("#tr-file").click();break;
+    case"pick-folder":root.querySelector("#tr-folder").click();break;
     case"thumb-pick":root.querySelector("#tr-thumb-file").click();break;
     case"sheet-close":sheet.close();break;
+    case"similar":await arrangeSimilar();break;
     case"confirm-all":{const s=season();await put({items:itemsOf(s.id).filter(i=>i.auto_done!=null&&!i.confirmed).map(i=>({...i,confirmed:true}))});break}
     case"backup":{const blob=new Blob([JSON.stringify({exported_at:nowISO(),...TR.data},null,2)],{type:"application/json"}),a=document.createElement("a");a.href=URL.createObjectURL(blob);a.download=`tracker-backup-${todayISO()}.json`;a.click();setTimeout(()=>URL.revokeObjectURL(a.href),1000);break}
   }
 }
-function onChange(e){if(e.target.dataset.change==="season"){TR.seasonId=e.target.value;TR.conceptTab="all";saveUI();render()}}
+async function onChange(e){
+  const d=e.target.dataset;
+  if(d.change==="season"){TR.seasonId=e.target.value;TR.conceptTab="all";saveUI();render()}
+  if(d.change==="concept"){const it=byId("items",d.id);if(it&&it.concept_id!==e.target.value){await put({items:[{...it,concept_id:e.target.value}]});toast(`${it.code} → ${conceptName(e.target.value)}`)}}
+}
 document.addEventListener("submit",async e=>{
   const f=e.target.closest?.("form[data-form]");if(!f||!root?.contains(f))return;
   e.preventDefault();
