@@ -105,6 +105,15 @@
 
 Vercel과 GitHub는 자동 배포 링크가 설정되어 있지 않을 수 있다. GitHub만 수정해 놓고 사이트까지 반영됐다고 말하지 않는다. Vercel 접근 권한이 있으면 같은 `subin-assistant` 프로젝트 production에 실제 배포하고 `https://subin-assistant.vercel.app`에서 확인한다. Vercel 접근 권한이 없으면 커밋까지만 하고 배포 대기라고 명확히 말한다.
 
+## 🎯 의뢰서 마감 트래커
+
+- 기획: `sbp37/mytodo` 저장소 README. 사이트 헤더의 🎯 버튼 또는 `/#tracker`로 연다.
+- 코드: `subin-assistant-site/tracker.js`, `tracker.css` (기존 파일은 헤더 버튼·로드 태그만 수정)
+- 트래커 버튼에는 `data-done` 같은 기존 앱 속성을 쓰지 않는다 (`app-render.js`가 문서 전체의 `[data-done]`에 클릭을 묶는다). 트래커는 `data-tdone` 등을 쓴다.
+- DB: `tracker_seasons`, `tracker_concepts`, `tracker_items`, `tracker_sessions`, `tracker_days` (스키마는 `supabase/migrations/`), 썸네일은 비공개 Storage 버킷 `tracker-thumbs`
+- API: 기존 `assistant-api`에 `GET ?resource=tracker`, `POST action=tracker_upsert|tracker_delete|tracker_thumb` 추가. 트래커 로직은 `supabase/functions/assistant-api/tracker.ts`. 배포된 `index.ts`는 인증 해시가 있어서 저장소에 두지 않는다.
+- `.ai` 원본과 썸네일은 GitHub에 커밋하지 않는다.
+
 ## 캘린더
 
 Google Calendar는 별도 자동 동기화 흐름이 `public.calendar_events`를 갱신한다. Google Calendar 원본을 GitHub에 커밋하지 않는다.
