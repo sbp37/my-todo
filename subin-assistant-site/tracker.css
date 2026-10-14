@@ -111,7 +111,8 @@ body.tr-on{overflow:hidden}
 .tr-menubar .tr-ctabs{flex:1;min-width:0;margin:0;padding:0}
 .tr-tools{display:flex;align-items:center;gap:8px;flex:none}
 .tr-zoom{display:flex;align-items:center;border:1px solid var(--line);border-radius:999px;background:#fff;overflow:hidden}
-.tr-zoom button{border:0;background:none;width:34px;height:30px;font-size:17px;font-weight:600;color:var(--ink-2)}
+.tr-zoom button{border:0;background:none;width:32px;height:30px;font-size:17px;font-weight:600;color:var(--ink-2)}
+.tr-zoom button+button{border-left:1px solid var(--line-2)}
 .tr-zoom button:disabled{opacity:.3;cursor:default}
 .tr-zoom span{font-size:var(--fs-xs);font-weight:700;color:var(--muted);padding:0 2px;white-space:nowrap}
 .tr-ctabs{display:flex;gap:6px;overflow-x:auto;padding-bottom:4px;margin-bottom:10px;scrollbar-width:none}
