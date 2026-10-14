@@ -153,7 +153,8 @@ function recommendOrder(s,st,carried){
   const all=itemsOf(s.id),pos=new Map(all.sort(galleryCmp).map((i,n)=>[i.id,n]));
   // 이미 하나 끝낸 묶음은 나머지가 복붙이라 먼저
   const started=new Set(all.filter(i=>i.group_id&&isDone(i)).map(i=>i.group_id));
-  const key=i=>[i.pinned_at?0:1,i.pinned_at?-Date.parse(i.pinned_at):0,carriedSet.has(i.id)?0:1,started.has(i.group_id)?0:1,conceptRank[i.concept_id]??99,i.important?0:1,pos.get(i.id)];
+  // 우선순위 칸(pinned_at)에 올린 건 그 칸에서 정한 순서대로 맨 먼저
+  const key=i=>[i.pinned_at?0:1,i.pinned_at?pos.get(i.id):0,carriedSet.has(i.id)?0:1,started.has(i.group_id)?0:1,conceptRank[i.concept_id]??99,i.important?0:1,pos.get(i.id)];
   const cmp=(a,b)=>{const x=key(a),y=key(b);for(let n=0;n<x.length;n++){if(x[n]<y[n])return-1;if(x[n]>y[n])return 1}return 0};
   const sorted=all.filter(i=>!isDone(i)).sort(cmp),out=[],seen=new Set();
   // 같은 묶음은 연달아 (첫 번째 것 바로 뒤에 나머지를 붙인다)
@@ -168,7 +169,7 @@ function reasonFor(i,s,st,carried){
   if(!i)return"";
   const parts=[],cs=st.concepts.find(x=>x.c.id===i.concept_id),worst=[...st.concepts].filter(x=>x.remaining).sort((a,b)=>a.ratio-b.ratio)[0];
   const g=i.group_id&&byId("groups",i.group_id),mates=g?itemsOf(s.id).filter(x=>x.group_id===g.id):[],gDone=mates.filter(isDone).length;
-  if(i.pinned_at)parts.push("직접 맨 위로 올린 의뢰서");
+  if(i.pinned_at)parts.push("⭐ 우선순위 칸에 올린 의뢰서");
   else if(carried.includes(i.id))parts.push("지난 작업일에 못 끝내서 이월된 의뢰서");
   else if(g&&gDone)parts.push(`묶음 «${g.name}» 이어서 · 끝낸 걸 복붙하면 돼요 (남은 ${mates.length-gDone}건)`);
   else if(cs&&worst&&cs.c.id===worst.c.id)parts.push(`진행률이 가장 뒤처진 컨셉 · ${cs.c.name} ${Math.round(cs.ratio*100)}%`);
@@ -203,10 +204,13 @@ function todayPlan(s){
   const orderU=[],seenU=new Set();for(const it of order){const u=unitOf.get(it.id);if(u&&!seenU.has(u.key)){seenU.add(u.key);orderU.push(u)}}
   // 오늘 목록: 아침에 정한 목록을 유지하고, 목표가 바뀌면 뒤에서 채우거나 덜어낸다
   const snap=TR.data.days.find(d=>d.season_id===s.id&&d.date===today);
-  let todoU=[...new Set((snap?.picks||[]).map(id=>unitOf.get(id)).filter(u=>u&&!u.done))];
-  const need=Math.max(0,goal-doneTodayU.length);
-  for(const u of orderU){if(todoU.length>=need)break;if(!todoU.includes(u))todoU.push(u)}
-  if(todoU.length>need)todoU=todoU.slice(0,need);
+  // 우선순위 칸에 올린 건 하루 중에 올려도 바로, 목표를 넘더라도 오늘 목록 맨 앞에. 나머지 자리는 아침 목록 → 추천 순서로 채운다
+  const pinnedU=orderU.filter(u=>u.items.some(i=>i.pinned_at&&!isDone(i)));
+  const need=Math.max(0,goal-doneTodayU.length),needRest=Math.max(0,need-pinnedU.length);
+  let restU=[...new Set((snap?.picks||[]).map(id=>unitOf.get(id)).filter(u=>u&&!u.done&&!pinnedU.includes(u)))];
+  for(const u of orderU){if(restU.length>=needRest)break;if(!pinnedU.includes(u)&&!restU.includes(u))restU.push(u)}
+  if(restU.length>needRest)restU=restU.slice(0,needRest);
+  let todoU=[...pinnedU,...restU];
   const rank=new Map(orderU.map((u,n)=>[u.key,n]));
   todoU.sort((a,b)=>(rank.get(a.key)??999)-(rank.get(b.key)??999));
   const todo=todoU.flatMap(u=>u.items.filter(i=>!isDone(i)).sort(galleryCmp).map(i=>i.id));
@@ -451,7 +455,9 @@ async function onGalleryDrop(evt){
   if(toB){const b=evt.to.closest(".tr-bundle");if(!prev){const x=siblingNode(b,-1);lo=x?edgeOrder(x,"max"):null}if(!next){const x=siblingNode(b,1);hi=x?edgeOrder(x,"min"):null}}
   const vals=spread(lo,hi,moved.length);
   moved.forEach((it,n)=>{
-    const row={...(changed.get(it.id)||it),sort_order:vals[n],difficulty:section};
+    // 우선순위 칸이면 난이도는 그대로 두고 표시만, 난이도 칸이면 우선순위에서 내린다
+    const row={...(changed.get(it.id)||it),sort_order:vals[n]};
+    if(section==="P")row.pinned_at=it.pinned_at||nowISO();else{row.difficulty=section;row.pinned_at=null}
     if(!isBundle)row.group_id=toB||null;
     if(isDone(it)){row.status="todo";row.completed_at=null;row.confirmed=true}
     changed.set(it.id,row);
@@ -725,7 +731,8 @@ function conceptTabs(s,items){
 function viewGallery(s,items){
   const tab=TR.conceptTab,shown=items.filter(i=>tab==="all"||i.concept_id===tab).sort(galleryCmp);
   const pending=shown.filter(i=>!isDone(i)),done=shown.filter(isDone).sort((a,b)=>(b.completed_at||"").localeCompare(a.completed_at||""));
-  const body=!shown.length?`<div class="empty">아직 의뢰서가 없어요.</div>`:`${DIFF.map(([k,l])=>gallerySection(k,l,pending.filter(i=>(i.difficulty||"M")===k),s)).join("")}${gallerySection("done","✓ 완료",done,s,"카드를 여기로 끌어도 완료돼요")}`;
+  // 맨 위 우선순위 칸(먼저 할 것) → 쉬움·중간·어려움 → 완료
+  const body=!shown.length?`<div class="empty">아직 의뢰서가 없어요.</div>`:`${gallerySection("P","⭐ 우선순위",pending.filter(i=>i.pinned_at),s,"먼저 할 걸 여기로 끌어 올려요 · 이 순서대로 추천")}${DIFF.map(([k,l])=>gallerySection(k,l,pending.filter(i=>!i.pinned_at&&(i.difficulty||"M")===k),s)).join("")}${gallerySection("done","✓ 완료",done,s,"카드를 여기로 끌어도 완료돼요")}`;
   return `<section class="section tr-gallery" data-zoom="${TR.zoom}" style="--tr-card:${ZOOMS[TR.zoom-1]||160}px">
   <div class="tr-menubar">${conceptTabs(s,items)}
   <div class="tr-tools"><button class="tr-btn sm ${TR.selecting?"on":""}" data-act="select">${TR.selecting?"선택 끝":"☑︎ 선택"}</button><button class="tr-btn sm tr-icon-btn" data-act="similar" title="같은 참고 그림끼리 옆에 붙이기" aria-label="같은 참고 그림끼리 옆에 붙이기">🧩</button><div class="tr-zoom" role="group" aria-label="썸네일 크기"><button data-zoom="-1" ${TR.zoom<=1?"disabled":""} aria-label="작게" title="작게">−</button><button data-zoom="1" ${TR.zoom>=ZOOMS.length?"disabled":""} aria-label="크게" title="크게">＋</button></div></div></div>
@@ -773,7 +780,7 @@ function renderSheet(){
   ${it.auto_done!=null&&!it.confirmed?`<div class="tr-autoline">🤖 자동 추정: <b>${it.auto_done?"완료":"미완료"}</b> <button class="tr-btn sm" data-confirm="${esc(it.id)}">맞아요</button><button class="tr-btn sm ghost" data-flip="${esc(it.id)}">아니에요</button></div>`:""}
   <div class="tr-actions">${isDone(it)?`<button class="tr-btn" data-tdone="${esc(it.id)}" data-tundo="1">↩ 완료 취소</button>`:`<button class="tr-btn primary" data-focus="${esc(it.id)}" ${act?.item_id===it.id?"disabled":""}>${act?.item_id===it.id?"집중 중":"▶ 집중 시작"}</button><button class="tr-btn" data-tdone="${esc(it.id)}">✓ 완료</button>`}</div>
   ${isDone(it)?`<p class="tr-sub">✓ ${md(dayOf(it.completed_at))} ${esc(recordLine(it))}</p>`:""}
-  <div class="tr-opts"><button class="tr-chip-btn ${it.important?"on":""}" data-important="${esc(it.id)}">⭐ 중요</button>${isDone(it)?"":`<button class="tr-chip-btn ${it.pinned_at?"on":""}" data-pin="${esc(it.id)}">${it.pinned_at?"⬆ 맨 위 고정됨":"⬆ 맨 위로"}</button>`}<span class="tr-diff">${["S","M","L"].map(d=>`<button class="tr-chip-btn ${it.difficulty===d?"on":""}" data-diff="${d}" data-id="${esc(it.id)}">${DIFF_LABEL[d]}</button>`).join("")}</span></div>
+  <div class="tr-opts"><button class="tr-chip-btn ${it.important?"on":""}" data-important="${esc(it.id)}">⭐ 중요</button>${isDone(it)?"":`<button class="tr-chip-btn ${it.pinned_at?"on":""}" data-pin="${esc(it.id)}">${it.pinned_at?"⭐ 우선순위 해제":"⭐ 우선순위로"}</button>`}<span class="tr-diff">${["S","M","L"].map(d=>`<button class="tr-chip-btn ${it.difficulty===d?"on":""}" data-diff="${d}" data-id="${esc(it.id)}">${DIFF_LABEL[d]}</button>`).join("")}</span></div>
   <div class="tr-sessions"><b>집중 기록</b> <span class="tr-sub">누적 ${Math.round(total/60)}분 · ${ss.length}회</span>${ss.slice(0,8).map(x=>`<div class="tr-sub">${md(dayOf(x.started_at))} ${hm(x.started_at)} ~ ${x.ended_at?hm(x.ended_at)+" · "+Math.round((x.focus_sec||0)/60)+"분":"진행 중"}</div>`).join("")}</div>
   <div class="tr-actions tr-sheet-foot"><button class="tr-btn sm" data-act="thumb-pick">썸네일 교체</button><span class="tr-sub">최종본을 카드에 끌어다 놓거나 ⌘V로 붙여넣어도 돼요</span><button class="tr-btn sm ghost danger" data-del-item="${esc(it.id)}">삭제</button></div></div>`;
 }
@@ -804,7 +811,8 @@ async function onClick(e){
   if(d.confirm){const it=byId("items",d.confirm);await put({items:[{...it,confirmed:true}]});return}
   if(d.flip){const it=byId("items",d.flip),done=!isDone(it);await put({items:[{...it,confirmed:true,status:done?"done":"todo",completed_at:done?(it.completed_at||nowISO()):null}]});return}
   if(d.important){const it=byId("items",d.important);await put({items:[{...it,important:!it.important}]});return}
-  if(d.pin){const it=byId("items",d.pin);TR.skip=0;await put({items:[{...it,pinned_at:it.pinned_at?null:nowISO()}]});return}
+  // 우선순위로 / 해제 (묶음이면 묶음 전체를 같이)
+  if(d.pin){const it=byId("items",d.pin),v=it.pinned_at?null:nowISO(),mates=it.group_id?TR.data.items.filter(i=>i.group_id===it.group_id&&!isDone(i)):[it];TR.skip=0;await put({items:mates.map(i=>({...i,pinned_at:v}))});toast(v?"⭐ 우선순위 칸으로 올렸어요. 오늘 목록 맨 앞에 들어가요.":"우선순위에서 내렸어요.");return}
   if(d.diff){const it=byId("items",d.id);await put({items:[{...it,difficulty:d.diff}]});return}
   if(d.delItem){const it=byId("items",d.delItem);if(!confirm(`${it.code}을(를) 지울까요? 집중 기록과 썸네일도 함께 지워져요.`))return;sheet.close();await remove("items",it.id);return}
   if(d.delConcept){const c=byId("concepts",d.delConcept),n=TR.data.items.filter(i=>i.concept_id===c.id).length;if(!confirm(`${c.name} 컨셉을 지울까요?${n?` 의뢰서 ${n}건도 함께 지워져요.`:""}`))return;if(TR.conceptTab===c.id)TR.conceptTab="all";await remove("concepts",c.id);return}
