@@ -582,8 +582,10 @@ function toast(msg,ms=2600){const t=root?.querySelector(".tr-toast");if(!t)retur
 const thumbHTML=(it,cls="")=>TR.thumbs[it.id]?`<img class="tr-thumb ${cls}" src="${esc(TR.thumbs[it.id])}" alt="${esc(it.code)}" loading="lazy">`:`<div class="tr-thumb tr-thumb-empty ${cls}"><span>${esc(it.item_type||"")}</span></div>`;
 const conceptName=id=>byId("concepts",id)?.name||"";
 // 컨셉 색: 설정에서 고른 색 → 이름 키워드(클로버=초록, 런드리=주황, 장미·러블리=분홍…) → 안 쓴 색 순서대로
-const PALETTE={green:["초록","#5c9a58","#eaf4e5"],orange:["주황","#d27f36","#fcefe0"],pink:["분홍","#cc5c84","#fbe9f0"],blue:["하늘","#4a8cc0","#e6f0f9"],purple:["보라","#8767bd","#f1ebf9"],yellow:["노랑","#b8921c","#faf3d6"],teal:["청록","#37968f","#e1f3f1"],brown:["갈색","#986a49","#f3ebe3"],red:["빨강","#c64e48","#f9e5e3"]};
-const COLOR_WORDS=[[/클로버|clover|그린|green|민트|mint|올리브/i,"green"],[/런드리|laundry|오렌지|orange|피치|peach|귤|살구/i,"orange"],[/장미|로즈|rose|러블리|lovely|핑크|pink|체리|cherry|딸기|하트/i,"pink"],[/블루|blue|오션|바다|스카이|sky|마린|데님/i,"blue"],[/라벤더|퍼플|purple|바이올렛|포도/i,"purple"],[/레몬|lemon|옐로|yellow|선샤인|써니|sunny|바나나/i,"yellow"],[/티얼|teal|에메랄드|아쿠아/i,"teal"],[/곰|베어|브라운|brown|커피|코코아|초코/i,"brown"],[/레드|red|토마토/i,"red"]];
+const PALETTE={green:["초록","#5c9a58","#eaf4e5"],orange:["주황","#d27f36","#fcefe0"],pink:["분홍","#cc5c84","#fbe9f0"],blue:["하늘","#4a8cc0","#e6f0f9"],purple:["보라","#8767bd","#f1ebf9"],yellow:["노랑","#b8921c","#faf3d6"],teal:["청록","#37968f","#e1f3f1"],brown:["갈색","#986a49","#f3ebe3"],red:["빨강","#c64e48","#f9e5e3"],gray:["회색","#6f6a65","#ecebe8"],white:["흰색","#8a8178","#ffffff"]};
+// 회색·흰색은 직접 고를 때만 (자동 배정에서는 빼서 컨셉끼리 구분이 잘 되게)
+const AUTO_COLORS=Object.keys(PALETTE).filter(k=>k!=="gray"&&k!=="white");
+const COLOR_WORDS=[[/클로버|clover|그린|green|민트|mint|올리브/i,"green"],[/런드리|laundry|오렌지|orange|피치|peach|귤|살구/i,"orange"],[/장미|로즈|rose|러블리|lovely|핑크|pink|체리|cherry|딸기|하트/i,"pink"],[/블루|blue|오션|바다|스카이|sky|마린|데님/i,"blue"],[/라벤더|퍼플|purple|바이올렛|포도/i,"purple"],[/레몬|lemon|옐로|yellow|선샤인|써니|sunny|바나나/i,"yellow"],[/티얼|teal|에메랄드|아쿠아/i,"teal"],[/곰|베어|브라운|brown|커피|코코아|초코/i,"brown"],[/레드|red|토마토/i,"red"],[/그레이|회색|gray|grey|차콜|charcoal/i,"gray"],[/화이트|흰|white|아이보리|ivory/i,"white"]];
 function conceptColor(cid){
   const c=byId("concepts",cid);if(!c)return PALETTE.brown;
   const s=byId("seasons",c.season_id),pick=s?.settings?.concept_colors?.[cid];
@@ -591,7 +593,7 @@ function conceptColor(cid){
   const word=k=>COLOR_WORDS.find(([re])=>re.test(nfc(byId("concepts",k)?.name)))?.[1];
   const own=word(cid);if(own)return PALETTE[own];
   const list=conceptsOf(c.season_id),used=new Set(list.map(x=>s?.settings?.concept_colors?.[x.id]||word(x.id)).filter(Boolean));
-  const free=Object.keys(PALETTE).filter(k=>!used.has(k)),rest=list.filter(x=>!PALETTE[s?.settings?.concept_colors?.[x.id]]&&!word(x.id));
+  const free=AUTO_COLORS.filter(k=>!used.has(k)),rest=list.filter(x=>!PALETTE[s?.settings?.concept_colors?.[x.id]]&&!word(x.id));
   return PALETTE[free[rest.findIndex(x=>x.id===cid)%Math.max(1,free.length)]||"brown"];
 }
 const cvars=cid=>{const [,base,bg]=conceptColor(cid);return `--cc:${base};--cc-bg:${bg}`};

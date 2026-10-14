@@ -108,7 +108,7 @@ body.tr-on{overflow:hidden}
 .tr-gauge-pct small{font-size:14px;font-weight:700;margin-left:1px}
 .tr-gauge-units{margin-top:2px;font-size:13px;color:var(--ink-2)}
 .tr-gauge-units b{font-weight:800;color:color-mix(in srgb,var(--cc,#333) 75%,var(--ink))}
-.tr-gauge .tr-bar{background:rgba(255,255,255,.75);margin-top:8px}
+.tr-gauge .tr-bar{background:color-mix(in srgb,var(--cc,#999) 16%,#fff);margin-top:8px}
 .tr-gauge .tr-bar i{background:var(--cc,var(--tr))}
 .tr-gauge.ok em{color:var(--ok)}
 .tr-gauge.warn em{color:var(--warn)}
