@@ -90,3 +90,19 @@ on conflict (id) do nothing;
 
 -- 갤러리 수동 정렬(드래그) 순서 (tracker_items_sort_order 마이그레이션)
 alter table public.tracker_items add column sort_order double precision;
+
+-- 같은 참고 자료를 쓰는 의뢰서 묶음 (tracker_groups 마이그레이션)
+create table public.tracker_groups (
+  id text primary key,
+  season_id text not null references public.tracker_seasons(id) on delete cascade,
+  name text not null,
+  sort double precision,
+  created_at timestamptz not null default now(),
+  updated_at timestamptz not null default now()
+);
+create index tracker_groups_season_idx on public.tracker_groups(season_id);
+alter table public.tracker_groups enable row level security;
+create trigger tracker_groups_updated_at before update on public.tracker_groups for each row execute function public.set_updated_at();
+
+alter table public.tracker_items add column group_id text references public.tracker_groups(id) on delete set null;
+create index tracker_items_group_idx on public.tracker_items(group_id);

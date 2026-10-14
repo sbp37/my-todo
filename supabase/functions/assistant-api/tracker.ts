@@ -8,7 +8,8 @@ const THUMB_TTL = 60 * 60 * 12
 const TABLES: Record<string, string[]> = {
   tracker_seasons: ['id', 'name', 'deadline', 'review_days', 'start_date', 'holidays', 'settings', 'active'],
   tracker_concepts: ['id', 'season_id', 'name', 'target', 'sort'],
-  tracker_items: ['id', 'season_id', 'concept_id', 'code', 'item_type', 'file_name', 'difficulty', 'important', 'pinned_at', 'status', 'auto_done', 'auto_score', 'confirmed', 'completed_at', 'note', 'sort_order'],
+  tracker_groups: ['id', 'season_id', 'name', 'sort'],
+  tracker_items: ['id', 'season_id', 'concept_id', 'code', 'item_type', 'file_name', 'difficulty', 'important', 'pinned_at', 'status', 'auto_done', 'auto_score', 'confirmed', 'completed_at', 'note', 'sort_order', 'group_id'],
   tracker_sessions: ['id', 'item_id', 'season_id', 'started_at', 'ended_at', 'paused_ms', 'pause_started_at', 'focus_sec'],
   tracker_days: ['id', 'season_id', 'date', 'goal', 'carry', 'share', 'picks'],
 }
@@ -42,14 +43,15 @@ export async function trackerGet(db: SupabaseClient) {
     if (error) throw new Error(error.message)
     return data || []
   }
-  const [seasons, concepts, items, sessions, days] = await Promise.all([
+  const [seasons, concepts, groups, items, sessions, days] = await Promise.all([
     read('tracker_seasons', 'created_at'),
     read('tracker_concepts', 'sort'),
+    read('tracker_groups', 'created_at'),
     read('tracker_items', 'created_at'),
     read('tracker_sessions', 'started_at'),
     read('tracker_days', 'date'),
   ])
-  return { tracker: true, seasons, concepts, items, sessions, days, thumb_urls: await signThumbs(db, items) }
+  return { tracker: true, seasons, concepts, groups, items, sessions, days, thumb_urls: await signThumbs(db, items) }
 }
 
 // action이 tracker_* 가 아니면 null을 돌려준다.

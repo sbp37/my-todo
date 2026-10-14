@@ -114,6 +114,8 @@ Vercel과 GitHub는 자동 배포 링크가 설정되어 있지 않을 수 있�
 - API: 기존 `assistant-api`에 `GET ?resource=tracker`, `POST action=tracker_upsert|tracker_delete|tracker_thumb` 추가. 트래커 로직은 `supabase/functions/assistant-api/tracker.ts`. 배포된 `index.ts`는 인증 해시가 있어서 저장소에 두지 않는다.
 - 폴더째 올리면 폴더 이름이 컨셉이 된다. 같은 시즌에 같은 품목 코드가 있으면 새 버전으로 갱신한다(중복 생성 안 함).
 - 갤러리 순서는 `tracker_items.sort_order`(드래그), 난이도 칸은 `difficulty`(S 쉬움 / M 중간 / L 어려움). 정렬은 SortableJS(cdnjs)로 한다.
+- 묶음(`tracker_groups`, `tracker_items.group_id`): 같은 참고 자료를 쓰는 의뢰서. 추천 묶음은 브라우저에서 썸네일의 "FG 참고자료" 칸 그림을 잘라 비교해 만들고, [아니야] 한 조합은 시즌 `settings.dismissed_groups`에 남긴다. 묶인 의뢰서는 "지금 이거부터"에서 연달아 추천한다.
+- 컨셉 색은 시즌 `settings.concept_colors`(설정에서 선택), 없으면 컨셉 이름 키워드(클로버=초록, 런드리=주황, 장미·러블리=분홍…)로 정한다.
 - `.ai` 원본과 썸네일은 GitHub에 커밋하지 않는다.
 
 ## 캘린더
