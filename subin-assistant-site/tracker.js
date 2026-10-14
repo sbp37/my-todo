@@ -543,7 +543,7 @@ const DIFF_LABEL=Object.fromEntries(DIFF);
 const ZOOMS=[120,160,220,300,420];
 function galleryCard(it,s){
   const guess=it.auto_done!=null&&!it.confirmed;
-  return `<div class="tr-card-item ${isDone(it)?"done":""}" data-item="${esc(it.id)}" data-open="${esc(it.id)}" role="button" tabindex="0"><div class="tr-card-thumb">${thumbHTML(it)}${it.important?`<span class="tr-badge star">⭐</span>`:""}<button class="tr-statebtn ${isDone(it)?"is-done":""} ${guess?"guess":""}" data-tdone="${esc(it.id)}" data-tundo="${isDone(it)?1:""}" title="${isDone(it)?"누르면 미완료로":"누르면 완료로"}">${guess?"🤖 ":""}${isDone(it)?"완료":"미완료"}${guess?"?":""}</button></div><span class="tr-card-label">${esc(it.code)}${it.item_type&&typeName(s,it.item_type)?` <small>${esc(typeName(s,it.item_type))}</small>`:""}</span></div>`;
+  return `<div class="tr-card-item ${isDone(it)?"done":""}" data-item="${esc(it.id)}" data-open="${esc(it.id)}" role="button" tabindex="0"><div class="tr-card-thumb">${thumbHTML(it)}${it.important?`<span class="tr-badge star">⭐</span>`:""}<button class="tr-statebtn ${isDone(it)?"is-done":""} ${guess?"guess":""}" data-tdone="${esc(it.id)}" data-tundo="${isDone(it)?1:""}" title="${isDone(it)?"누르면 미완료로":"누르면 완료로"}${guess?" (자동 추정)":""}">${isDone(it)?"✓ 완료":"미완료"}</button></div><span class="tr-card-label">${esc(it.code)}${it.item_type&&typeName(s,it.item_type)?` <small>${esc(typeName(s,it.item_type))}</small>`:""}</span></div>`;
 }
 function gallerySection(key,label,list,s,hint){
   const closed=!!TR.collapsed[key];

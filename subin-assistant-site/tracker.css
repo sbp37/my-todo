@@ -131,11 +131,10 @@ body.tr-on{overflow:hidden}
 .tr-card-item.done .tr-card-label{color:var(--ok)}
 .tr-badge{position:absolute;top:6px;right:6px;padding:2px 7px;border-radius:99px;background:rgba(255,255,255,.92);border:1px solid var(--line);font-size:var(--fs-xs);font-weight:700}
 /* 완료/미완료 버튼: 썸네일 오른쪽 아래 */
-.tr-statebtn{position:absolute;right:6px;bottom:6px;padding:4px 10px;border-radius:99px;border:1px solid var(--tr-line);background:rgba(255,255,255,.95);font-size:var(--fs-xs);font-weight:700;color:var(--tr);box-shadow:0 1px 4px rgba(38,34,31,.12)}
-.tr-statebtn:hover{background:var(--tr);border-color:var(--tr);color:#fff}
-.tr-statebtn.is-done{border-color:#c9d6c4;color:var(--ok)}
-.tr-statebtn.is-done:hover{background:var(--ok);border-color:var(--ok);color:#fff}
-.tr-statebtn.guess{border-style:dashed}
+.tr-statebtn{position:absolute;right:6px;bottom:6px;padding:3px 9px;border-radius:99px;border:0;background:rgba(255,255,255,.55);backdrop-filter:blur(4px);-webkit-backdrop-filter:blur(4px);font-size:var(--fs-xs);font-weight:600;color:var(--muted);transition:background .15s,color .15s}
+.tr-statebtn:hover{background:rgba(255,255,255,.9);color:var(--ink)}
+.tr-statebtn.is-done{background:rgba(237,241,235,.7);color:var(--ok)}
+.tr-statebtn.is-done:hover{background:var(--done-bg)}
 .tr-ghost{opacity:.35}
 .tr-chosen .tr-thumb{box-shadow:0 8px 24px rgba(38,34,31,.22)}
 .tr-gallery-tip{margin:4px 2px 0;font-size:var(--fs-xs)}
