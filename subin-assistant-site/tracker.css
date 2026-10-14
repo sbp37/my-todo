@@ -107,9 +107,11 @@ body.tr-on{overflow:hidden}
 .tr-drop-btns{display:flex;gap:8px;flex:none}
 
 /* 갤러리: 상단 메뉴바(컨셉 탭 · 비슷한 것끼리 · 확대) + 난이도 칸 + 완료 칸 */
-.tr-menubar{position:sticky;top:var(--tr-top-h,92px);z-index:4;display:flex;align-items:center;gap:10px;margin:0 -16px 12px;padding:8px 16px;background:color-mix(in srgb,#f5f1eb 92%,transparent);backdrop-filter:blur(10px);-webkit-backdrop-filter:blur(10px);border-bottom:1px solid var(--line-2)}
-.tr-menubar .tr-ctabs{flex:1;min-width:0;margin:0;padding:0}
-.tr-tools{display:flex;align-items:center;gap:8px;flex:none}
+/* 메뉴바: 위 줄 컨셉 탭(많으면 다음 줄로 넘김, 잘리지 않게) / 아래 줄 메뉴 */
+.tr-menubar{position:sticky;top:var(--tr-top-h,92px);z-index:4;display:flex;flex-direction:column;align-items:stretch;gap:8px;margin:0 -16px 12px;padding:8px 16px;background:color-mix(in srgb,#f5f1eb 92%,transparent);backdrop-filter:blur(10px);-webkit-backdrop-filter:blur(10px);border-bottom:1px solid var(--line-2)}
+.tr-menubar .tr-ctabs{flex-wrap:wrap;overflow:visible;margin:0;padding:0}
+.tr-tools{display:flex;align-items:center;flex-wrap:wrap;gap:8px}
+.tr-tools .tr-zoom{margin-left:auto}
 .tr-zoom{display:flex;align-items:center;border:1px solid var(--line);border-radius:999px;background:#fff;overflow:hidden}
 .tr-zoom button{border:0;background:none;width:32px;height:30px;font-size:17px;font-weight:600;color:var(--ink-2)}
 .tr-zoom button+button{border-left:1px solid var(--line-2)}
@@ -225,10 +227,7 @@ body.tr-on{overflow:hidden}
   .tr-grid{grid-template-columns:repeat(2,1fr);gap:10px;padding:0 10px 12px}
   .tr-gallery[data-zoom="1"] .tr-grid{grid-template-columns:repeat(3,1fr)}
   .tr-gallery[data-zoom="3"] .tr-grid,.tr-gallery[data-zoom="4"] .tr-grid,.tr-gallery[data-zoom="5"] .tr-grid{grid-template-columns:1fr}
-  .tr-menubar{flex-wrap:wrap;gap:8px}
-  .tr-menubar .tr-ctabs{flex-basis:100%}
-  .tr-tools{width:100%;flex-wrap:wrap;gap:6px}
-  .tr-tools .tr-zoom{margin-left:auto}
+  .tr-tools{gap:6px}
   .tr-strip>.tr-card-item{flex-basis:42%}
   .tr-gallery[data-zoom="1"] .tr-strip>.tr-card-item{flex-basis:30%}
   .tr-gallery[data-zoom="3"] .tr-strip>.tr-card-item,.tr-gallery[data-zoom="4"] .tr-strip>.tr-card-item,.tr-gallery[data-zoom="5"] .tr-strip>.tr-card-item{flex-basis:80%}
