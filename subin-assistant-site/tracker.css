@@ -89,6 +89,14 @@ body.tr-on{overflow:hidden}
 .tr-ustats.closed .tr-ustats-row{display:none}
 .tr-ustats-row{display:grid;grid-template-columns:repeat(3,1fr);gap:4px;margin-top:10px;padding:10px 0 2px;border-radius:var(--r-md);background:rgba(248,236,223,.45)}
 .tr-ustats-row .tr-stat:first-child{border-left:0}
+/* 남은 시간 예측 */
+.tr-time{grid-column:1/-1;margin:10px 4px 0;padding-top:10px;border-top:1px dashed var(--line);font-size:15px;color:var(--ink-2);text-align:center}
+.tr-time b{font-weight:800;color:var(--ink)}
+.tr-time small{display:block;margin-top:2px;font-size:var(--fs-sm);color:var(--muted)}
+.tr-min{display:flex;align-items:center;gap:6px;font-weight:600;color:var(--muted)}
+.tr-min input{width:90px}
+.tr-goal-tomorrow{display:block;margin-top:4px;font-size:15px;color:var(--ink-2)}
+.tr-goal-tomorrow.ok{color:var(--ok)}
 /* 오늘 목표 아래 줄 */
 .tr-goal-files{font-size:14px;font-weight:600;color:var(--muted);margin-left:6px}
 .tr-goal-info{margin:8px 0 0;font-size:15px;color:var(--ink-2);line-height:1.5}
