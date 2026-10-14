@@ -78,6 +78,11 @@ body.tr-on{overflow:hidden}
 .tr-stat small{font-size:var(--fs-sm);color:var(--muted);font-weight:600}
 .tr-stat b{font-size:22px;font-weight:800}
 .tr-stat span{font-size:14px;font-weight:600;color:var(--ink-2)}
+/* 완료 숫자는 초록, 오늘 몫을 채우면 하루 필요량에 초록 줄 */
+.tr-ok{color:var(--ok);font-weight:800}
+.tr-stat b span.tr-ok,.tr-stat span .tr-ok{font-size:inherit;color:var(--ok);font-weight:800}
+.tr-stat b.tr-strike{color:var(--muted);text-decoration:line-through;text-decoration-color:var(--ok);text-decoration-thickness:3px}
+.tr-today-done{display:inline-block;padding:1px 8px;border-radius:99px;background:var(--done-bg);color:var(--ok);font-weight:800;font-size:13px;margin-right:4px}
 /* 중요한 숫자(남음 등)는 강조색 굵게 */
 .tr-em{font-style:normal;font-weight:800;color:var(--tr)}
 /* 시즌 상단: 묶음 반영하면 (접기) */
