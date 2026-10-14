@@ -97,6 +97,23 @@ function prodEnd(s){
 }
 function countWorkdays(s,a,b){let n=0;if(!a||!b)return 0;for(let d=a;d<=b;d=D.add(d,1))if(isWorkday(s,d))n++;return n}
 function conceptTarget(c,its){return c.target!=null&&c.target!==""?Number(c.target):its.length}
+// 작업 단위: 안 묶인 의뢰서 1건 = 1, 묶음 하나 = 1 (같은 자료라 한 번 하면 나머지는 복붙). 묶음은 안의 의뢰서가 전부 끝나야 완료
+function unitsOf(items){
+  const map=new Map(),out=[];
+  for(const it of items){
+    const g=it.group_id&&byId("groups",it.group_id),key=g?"g:"+g.id:it.id;
+    let u=map.get(key);if(!u){u={key,group:g||null,items:[]};map.set(key,u);out.push(u)}
+    u.items.push(it);
+  }
+  for(const u of out){u.done=u.items.every(isDone);u.completedAt=u.done?u.items.map(i=>i.completed_at||"").sort().pop():null}
+  return out;
+}
+// 파일 기준 목표·완료에서 묶음으로 아낀 만큼 뺀 작업 기준 숫자
+function unitCounts(its,target,done){
+  const units=unitsOf(its),saved=its.length-units.length,savedDone=units.reduce((a,u)=>a+(u.items.filter(isDone).length-(u.done?1:0)),0);
+  const uTarget=Math.max(0,target-saved),uDone=Math.min(uTarget,Math.max(0,done-savedDone));
+  return {units,bundles:units.filter(u=>u.group).length,uTarget,uDone,uRemaining:Math.max(0,uTarget-uDone)};
+}
 function seasonStats(s){
   const today=todayISO(),items=itemsOf(s.id),end=prodEnd(s);
   const totalDays=end?countWorkdays(s,s.start_date||today,end):0;
@@ -106,12 +123,16 @@ function seasonStats(s){
     const its=items.filter(i=>i.concept_id===c.id),done=its.filter(isDone).length,target=conceptTarget(c,its);
     const ratio=target?Math.min(1,done/target):1;
     const risk=!target?"none":done>=target?"done":ratio>=expected?"ok":ratio>=expected-.15?"warn":"risk";
-    return {c,its,done,target,ratio,risk,remaining:Math.max(0,target-done)};
+    return {c,its,done,target,ratio,risk,remaining:Math.max(0,target-done),...unitCounts(its,target,done)};
   });
   const target=concepts.reduce((a,x)=>a+x.target,0),done=concepts.reduce((a,x)=>a+Math.min(x.done,x.target),0);
   const remaining=Math.max(0,target-done),left=end&&today<=end?countWorkdays(s,today,end):0;
+  // 시즌 전체 작업 수 (여러 컨셉에 걸친 묶음도 한 번만)
+  const u=unitCounts(items,target,done);
   return {today,end,left,target,done,remaining,expected,concepts,
     need:left?Math.ceil(remaining/left):remaining,
+    units:u.units,bundles:u.bundles,uTarget:u.uTarget,uDone:u.uDone,uRemaining:u.uRemaining,
+    uNeed:left?Math.ceil(u.uRemaining/left):u.uRemaining,
     dday:s.deadline?D.diff(today,s.deadline):null,overdue:!!end&&today>end&&remaining>0};
 }
 function lastType(s){
@@ -157,35 +178,42 @@ function reasonFor(i,s,st,carried){
   if(i.important)parts.push("⭐ 중요 표시");
   return parts.join(" · ");
 }
+// 오늘 목표·이월·하루 몫은 작업 단위(묶음 = 1)로 센다. 목록에는 묶음 안 의뢰서가 모두 나온다
 function todayPlan(s){
-  const st=seasonStats(s),today=st.today,items=itemsOf(s.id);
+  const st=seasonStats(s),today=st.today,items=itemsOf(s.id),unitOf=new Map();
+  st.units.forEach(u=>u.items.forEach(i=>unitOf.set(i.id,u)));
   const doneToday=items.filter(i=>isDone(i)&&dayOf(i.completed_at)===today);
+  const doneTodayU=st.units.filter(u=>u.done&&dayOf(u.completedAt)===today);
   const workday=isWorkday(s,today)&&!!st.end&&(today<=st.end||st.overdue);
   const prev=TR.data.days.filter(d=>d.season_id===s.id&&d.date<today).sort((a,b)=>b.date.localeCompare(a.date))[0];
-  let carry=0,carried=[];
+  let carry=0,carriedU=[];
   if(prev){
-    const doneOnPrev=items.filter(i=>isDone(i)&&dayOf(i.completed_at)===prev.date).length;
+    const doneOnPrev=st.units.filter(u=>u.done&&dayOf(u.completedAt)===prev.date).length;
     carry=Math.max(0,(prev.goal||0)-doneOnPrev);
-    carried=(prev.picks||[]).filter(id=>{const it=byId("items",id);return it&&!isDone(it)});
+    carriedU=[...new Set((prev.picks||[]).map(id=>unitOf.get(id)).filter(u=>u&&!u.done))];
   }
-  const remStart=st.remaining+doneToday.length;
+  const carried=carriedU.flatMap(u=>u.items.filter(i=>!isDone(i)).map(i=>i.id));
+  const remStart=st.uRemaining+doneTodayU.length;
   carry=Math.min(carry,remStart);
   let share=0;
   if(workday)share=st.left?Math.ceil(Math.max(0,remStart-carry)/st.left):Math.max(0,remStart-carry);
   if(!workday)carry=0;
   const goal=Math.min(remStart,carry+share);
   const order=recommendOrder(s,st,carried);
+  const orderU=[],seenU=new Set();for(const it of order){const u=unitOf.get(it.id);if(u&&!seenU.has(u.key)){seenU.add(u.key);orderU.push(u)}}
   // 오늘 목록: 아침에 정한 목록을 유지하고, 목표가 바뀌면 뒤에서 채우거나 덜어낸다
   const snap=TR.data.days.find(d=>d.season_id===s.id&&d.date===today);
-  let todo=(snap?.picks||[]).filter(id=>{const it=byId("items",id);return it&&!isDone(it)});
-  const need=Math.max(0,goal-doneToday.length);
-  for(const it of order){if(todo.length>=need)break;if(!todo.includes(it.id))todo.push(it.id)}
-  if(todo.length>need)todo=todo.slice(0,need);
-  const rank=new Map(order.map((it,n)=>[it.id,n]));
-  todo.sort((a,b)=>(rank.get(a)??999)-(rank.get(b)??999));
+  let todoU=[...new Set((snap?.picks||[]).map(id=>unitOf.get(id)).filter(u=>u&&!u.done))];
+  const need=Math.max(0,goal-doneTodayU.length);
+  for(const u of orderU){if(todoU.length>=need)break;if(!todoU.includes(u))todoU.push(u)}
+  if(todoU.length>need)todoU=todoU.slice(0,need);
+  const rank=new Map(orderU.map((u,n)=>[u.key,n]));
+  todoU.sort((a,b)=>(rank.get(a.key)??999)-(rank.get(b.key)??999));
+  const todo=todoU.flatMap(u=>u.items.filter(i=>!isDone(i)).sort(galleryCmp).map(i=>i.id));
   const next=workday?todo:order.map(i=>i.id);
   let nextWorkday="";for(let d=D.add(today,1),g=0;g<30;g++,d=D.add(d,1))if(isWorkday(s,d)){nextWorkday=d;break}
-  return {st,today,workday,carry,share,goal,carried,doneToday,todo,next,order,nextWorkday,picks:[...doneToday.map(i=>i.id),...todo],snap};
+  return {st,today,workday,carry,share,goal,carried,doneToday,doneTodayU,todo,todoU,next,order,nextWorkday,picks:[...doneToday.map(i=>i.id),...todo],snap,
+    goalFiles:doneToday.length+todo.length};
 }
 // 작업일이면 오늘 목표를 스냅샷으로 남겨서 다음 작업일 이월 계산에 쓴다
 let snapPending="";
@@ -628,10 +656,12 @@ function render(){
 function seasonSetup(){
   return `<section class="card tr-card"><h3>시즌부터 만들어요</h3><p class="tr-sub">마감일과 검수 여유일로 하루 필요량을 계산해요.</p><form class="tr-form" data-form="season-new"><label>시즌<input name="name" value="27SS" required></label><label>마감일<input type="date" name="deadline" value="2026-11-03" required></label><label>검수 여유일 <small>영업일</small><input type="number" name="review_days" min="0" max="10" value="1"></label><button class="tr-btn primary" type="submit">시즌 만들기</button></form></section>`;
 }
+// 오늘 목표는 작업 수(묶음 = 1)로, 파일 개수는 괄호로
 function goalBar(p){
-  const done=p.doneToday.length,pct=p.goal?Math.min(100,Math.round(done/p.goal*100)):100;
-  if(!p.workday)return `<section class="card tr-card tr-goal"><div class="tr-goal-head"><div><div class="tr-eyebrow">오늘</div><h3>오늘은 쉬는 날이에요</h3></div></div><p class="tr-sub">${p.st.end?`다음 작업일 ${md(p.nextWorkday)} · 남은 ${p.st.remaining}건 · 하루 ${p.st.need}건씩`:"설정에서 마감일을 정하면 하루 목표가 나와요."}${done?` · 오늘 ${done}건 완료`:""}</p></section>`;
-  return `<section class="card tr-card tr-goal"><div class="tr-goal-head"><div><div class="tr-eyebrow">오늘 목표</div><h3><b>${done}</b> / ${p.goal}건</h3></div><div class="tr-goal-split">${p.carry?`<span class="tr-chip carry">밀린 ${p.carry}</span> + `:""}<span class="tr-chip">오늘 ${p.share}</span></div></div><div class="tr-bar"><i style="width:${pct}%"></i></div><p class="tr-sub">${p.st.overdue?"⚠️ 제작 마감이 지났어요. 남은 걸 오늘 몫으로 잡았어요.":`제작 마감 ${md(p.st.end)}까지 ${p.st.left}일 · 남은 ${p.st.remaining}건`}${done>=p.goal&&p.goal?" · 🎉 오늘 목표 달성!":""}</p></section>`;
+  const done=p.doneTodayU.length,files=p.doneToday.length,pct=p.goal?Math.min(100,Math.round(done/p.goal*100)):100,st=p.st;
+  const left=st.bundles?`남은 작업 <b class="tr-em">${st.uRemaining}</b>건 (파일 ${st.remaining}개)`:`남은 <b class="tr-em">${st.remaining}</b>건`;
+  if(!p.workday)return `<section class="card tr-card tr-goal"><div class="tr-goal-head"><div><div class="tr-eyebrow">오늘</div><h3>오늘은 쉬는 날이에요</h3></div></div><p class="tr-goal-info">${st.end?`다음 작업일 ${md(p.nextWorkday)} · ${left} · 하루 <b>${st.uNeed}</b>건씩`:"설정에서 마감일을 정하면 하루 목표가 나와요."}${files?` · 오늘 파일 ${files}개 완료`:""}</p></section>`;
+  return `<section class="card tr-card tr-goal"><div class="tr-goal-head"><div><div class="tr-eyebrow">오늘 목표</div><h3><b>${done}</b> / ${p.goal}건${p.goalFiles!==p.goal?` <small class="tr-goal-files">파일 ${files} / ${p.goalFiles}개</small>`:""}</h3></div><div class="tr-goal-split">${p.carry?`<span class="tr-chip carry">밀린 ${p.carry}</span> + `:""}<span class="tr-chip">오늘 ${p.share}</span></div></div><div class="tr-bar"><i style="width:${pct}%"></i></div><p class="tr-goal-info">${st.overdue?"⚠️ 제작 마감이 지났어요. 남은 걸 오늘 몫으로 잡았어요.":`제작 마감 ${md(st.end)}까지 <b>${st.left}</b>일 · ${left}`}${done>=p.goal&&p.goal?" · 🎉 오늘 목표 달성!":""}${st.bundles?`<span class="tr-goal-note">묶음은 1건으로 세요 · 묶음 안 의뢰서가 다 끝나야 완료</span>`:""}</p></section>`;
 }
 function timerCard(){
   const x=activeSession();if(!x)return"";const it=byId("items",x.item_id);if(!it)return"";
@@ -640,16 +670,16 @@ function timerCard(){
 function heroCard(s,p){
   const act=activeSession();
   // 오늘 몫을 다 했으면 다음 작업일 것 중에서 "하나 더"를 보여준다
-  const extra=!p.next.filter(id=>id!==act?.item_id).length&&p.st.remaining>0;
+  const extra=!p.next.filter(id=>id!==act?.item_id).length&&p.st.uRemaining>0;
   const pool=(extra?p.order.map(i=>i.id):p.next).filter(id=>id!==act?.item_id);
   if(!pool.length&&act)return"";
-  if(!pool.length)return p.st.target?`<section class="card tr-card tr-hero"><div class="tr-eyebrow">지금 이거부터</div><h3>${p.st.remaining?"오늘 몫은 다 끝냈어요 🎉":"시즌 의뢰서를 전부 끝냈어요 🎉"}</h3><p class="tr-sub">${p.st.remaining?`남은 ${p.st.remaining}건은 다음 작업일 몫이에요.`:"수고했어요!"}</p></section>`:`<section class="card tr-card tr-hero"><div class="tr-eyebrow">시작하기</div><h3>의뢰서를 등록해 주세요</h3><p class="tr-sub">시즌 탭에서 .ai 파일이나 폴더를 끌어다 놓으면 썸네일과 컨셉이 자동으로 정리돼요.</p><button class="tr-btn primary" data-view="season">시즌으로 가기</button></section>`;
+  if(!pool.length)return p.st.target?`<section class="card tr-card tr-hero"><div class="tr-eyebrow">지금 이거부터</div><h3>${p.st.uRemaining?"오늘 몫은 다 끝냈어요 🎉":"시즌 의뢰서를 전부 끝냈어요 🎉"}</h3><p class="tr-sub">${p.st.uRemaining?`남은 ${p.st.uRemaining}건은 다음 작업일 몫이에요.`:"수고했어요!"}</p></section>`:`<section class="card tr-card tr-hero"><div class="tr-eyebrow">시작하기</div><h3>의뢰서를 등록해 주세요</h3><p class="tr-sub">시즌 탭에서 .ai 파일이나 폴더를 끌어다 놓으면 썸네일과 컨셉이 자동으로 정리돼요.</p><button class="tr-btn primary" data-view="season">시즌으로 가기</button></section>`;
   const it=byId("items",pool[TR.skip%pool.length]);
   return `<section class="card tr-card tr-hero"><button class="tr-hero-thumb" data-open="${esc(it.id)}">${thumbHTML(it,"lg")}</button><div class="tr-hero-body"><div class="tr-eyebrow">${extra?"🎉 오늘 몫 끝 · 여유 있으면 하나 더":"지금 이거부터"}${pool.length>1?` · ${TR.skip%pool.length+1}/${pool.length}`:""}</div><h3>${esc(it.code)}</h3><div class="tr-meta"><span class="tr-chip">${esc(conceptName(it.concept_id))}</span>${it.item_type?`<span class="tr-chip">${esc(typeName(s,it.item_type)||it.item_type)}</span>`:""}${p.carried.includes(it.id)?`<span class="tr-chip carry">이월</span>`:""}${it.important?`<span class="tr-chip">⭐</span>`:""}</div><p class="tr-reason">→ ${esc(reasonFor(it,s,p.st,p.carried))}</p><div class="tr-actions"><button class="tr-btn primary" data-focus="${esc(it.id)}">▶ 집중 시작</button>${pool.length>1?`<button class="tr-btn" data-act="skip">다른 거 ›</button>`:""}<button class="tr-btn ghost" data-tdone="${esc(it.id)}">✓ 완료</button></div></div></section>`;
 }
 function itemRow(it,p,s){
   const act=activeSession();
-  return `<div class="tr-row ${isDone(it)?"done":""}" data-item="${esc(it.id)}"><button class="bigcheck ${isDone(it)?"on":""}" data-tdone="${esc(it.id)}" data-tundo="${isDone(it)?1:""}" title="${isDone(it)?"완료 취소":"완료"}">✓</button><button class="tr-thumb-btn" data-open="${esc(it.id)}">${thumbHTML(it,"xs")}</button><div class="tr-row-main"><div class="tr-row-title">${esc(it.code)}${p.carried.includes(it.id)&&!isDone(it)?` <span class="tr-chip carry">이월</span>`:""}${act?.item_id===it.id?` <span class="tr-chip live">집중 중</span>`:""}</div><div class="tr-sub">${esc(conceptName(it.concept_id))}${it.item_type?" · "+esc(typeName(s,it.item_type)||it.item_type):""}${isDone(it)?" · "+esc(recordLine(it)):""}</div></div>${isDone(it)||act?.item_id===it.id?"":`<button class="tr-btn sm" data-focus="${esc(it.id)}">▶</button>`}</div>`;
+  return `<div class="tr-row ${isDone(it)?"done":""}" data-item="${esc(it.id)}"><button class="bigcheck ${isDone(it)?"on":""}" data-tdone="${esc(it.id)}" data-tundo="${isDone(it)?1:""}" title="${isDone(it)?"완료 취소":"완료"}">✓</button><button class="tr-thumb-btn" data-open="${esc(it.id)}">${thumbHTML(it,"xs")}</button><div class="tr-row-main"><div class="tr-row-title">${esc(it.code)}${p.carried.includes(it.id)&&!isDone(it)?` <span class="tr-chip carry">이월</span>`:""}${act?.item_id===it.id?` <span class="tr-chip live">집중 중</span>`:""}${it.group_id&&byId("groups",it.group_id)?` <span class="tr-chip">🔗 ${esc(byId("groups",it.group_id).name)}</span>`:""}</div><div class="tr-sub">${esc(conceptName(it.concept_id))}${it.item_type?" · "+esc(typeName(s,it.item_type)||it.item_type):""}${isDone(it)?" · "+esc(recordLine(it)):""}</div></div>${isDone(it)||act?.item_id===it.id?"":`<button class="tr-btn sm" data-focus="${esc(it.id)}">▶</button>`}</div>`;
 }
 function viewToday(s){
   const p=todayPlan(s);saveSnapshot(s,p);
@@ -706,8 +736,10 @@ function viewGallery(s,items){
 function viewSeason(s){
   const st=seasonStats(s),items=itemsOf(s.id);
   const unconfirmed=items.filter(i=>i.auto_done!=null&&!i.confirmed);
-  return `<section class="card tr-card tr-stats"><div class="tr-stat"><small>마감</small><b>${st.dday==null?"미정":st.dday>0?"D-"+st.dday:st.dday===0?"D-DAY":"D+"+(-st.dday)}</b><span>${s.deadline?md(s.deadline):"설정에서 지정"}</span></div><div class="tr-stat"><small>남은 제작일</small><b>${st.left}일</b><span>${st.end?"제작 마감 "+md(st.end):"–"}</span></div><div class="tr-stat"><small>완료 / 전체</small><b>${st.done} / ${st.target}</b><span>남음 ${st.remaining}</span></div><div class="tr-stat"><small>하루 필요량</small><b>${st.end?st.need+"건":"–"}</b><span>${st.overdue?"⚠️ 마감 초과":st.remaining?"남은 ÷ 제작일":"🎉 완료"}</span></div></section>
-  <section class="section"><div class="section-title"><h3>컨셉별 진행</h3><span>기대 진행률 ${Math.round(st.expected*100)}%</span></div><div class="tr-gauges">${st.concepts.length?st.concepts.map(x=>`<button class="card tr-gauge ${RISK[x.risk][1]}" style="${cvars(x.c.id)}" data-target="${esc(x.c.id)}" title="목표 개수 바꾸기"><div class="tr-gauge-head"><b>${esc(x.c.name)}</b><em>${RISK[x.risk][0]}</em></div><div class="tr-gauge-nums"><span class="tr-gauge-count"><b>${x.done}</b> / ${x.target}</span><span class="tr-gauge-pct">${Math.round(x.ratio*100)}<small>%</small></span></div><div class="tr-bar"><i style="width:${Math.round(x.ratio*100)}%"></i><s style="left:${Math.round(st.expected*100)}%"></s></div></button>`).join(""):`<div class="empty">파일을 등록하면 파일명에서 컨셉을 자동으로 만들어요.</div>`}</div></section>
+  return `<section class="card tr-card tr-stats"><div class="tr-stat"><small>마감</small><b>${st.dday==null?"미정":st.dday>0?"D-"+st.dday:st.dday===0?"D-DAY":"D+"+(-st.dday)}</b><span>${s.deadline?md(s.deadline):"설정에서 지정"}</span></div><div class="tr-stat"><small>남은 제작일</small><b>${st.left}일</b><span>${st.end?"제작 마감 "+md(st.end):"–"}</span></div><div class="tr-stat"><small>완료 / 전체</small><b>${st.done} / ${st.target}</b><span>남음 <em class="tr-em">${st.remaining}</em></span></div><div class="tr-stat"><small>하루 필요량</small><b>${st.end?st.need+"건":"–"}</b><span>${st.overdue?"⚠️ 마감 초과":st.remaining?"남은 ÷ 제작일":"🎉 완료"}</span></div>
+  ${st.bundles?`<div class="tr-ustats ${TR.collapsed.units?"closed":""}"><button class="tr-ustats-head" data-collapse="units" aria-expanded="${!TR.collapsed.units}"><span class="tr-caret">▾</span><b>🔗 묶음 반영하면</b><span>묶음 ${st.bundles}개는 1건으로 · 오늘 목표는 이 기준</span>${TR.collapsed.units?`<span class="tr-ustats-sum">남은 작업 <em class="tr-em">${st.uRemaining}</em> · 하루 ${st.end?st.uNeed:"–"}건</span>`:""}</button>
+  <div class="tr-ustats-row"><div class="tr-stat"><small>작업 완료 / 전체</small><b>${st.uDone} / ${st.uTarget}</b><span>남음 <em class="tr-em">${st.uRemaining}</em></span></div><div class="tr-stat"><small>아낀 작업</small><b>${st.target-st.uTarget}건</b><span>복붙으로 끝나는 파일</span></div><div class="tr-stat"><small>하루 필요량</small><b>${st.end?st.uNeed+"건":"–"}</b><span>남은 작업 ÷ 제작일</span></div></div></div>`:""}</section>
+  <section class="section"><div class="section-title"><h3>컨셉별 진행</h3><span>기대 진행률 ${Math.round(st.expected*100)}%</span></div><div class="tr-gauges">${st.concepts.length?st.concepts.map(x=>`<button class="card tr-gauge ${RISK[x.risk][1]}" style="${cvars(x.c.id)}" data-target="${esc(x.c.id)}" title="목표 개수 바꾸기"><div class="tr-gauge-head"><b>${esc(x.c.name)}</b><em>${RISK[x.risk][0]}</em></div><div class="tr-gauge-nums"><span class="tr-gauge-count"><b>${x.done}</b> / ${x.target}</span><span class="tr-gauge-pct">${Math.round(x.ratio*100)}<small>%</small></span></div>${x.bundles?`<div class="tr-gauge-units">묶으면 <b>${x.uDone} / ${x.uTarget}</b> · 묶음 ${x.bundles}개</div>`:""}<div class="tr-bar"><i style="width:${Math.round(x.ratio*100)}%"></i><s style="left:${Math.round(st.expected*100)}%"></s></div></button>`).join(""):`<div class="empty">파일을 등록하면 파일명에서 컨셉을 자동으로 만들어요.</div>`}</div></section>
   <section class="tr-drop-card"><div><b>의뢰서 등록</b><span>폴더째 끌어다 놓으면 폴더 이름이 컨셉이 돼요 · 다시 저장한 파일을 올리면 새 버전으로 바뀌어요</span></div><div class="tr-drop-btns"><button class="tr-btn" data-act="pick-folder">폴더 선택</button><button class="tr-btn primary" data-act="pick">파일 선택</button></div></section>
   ${unconfirmed.length?`<section class="card tr-card tr-confirm"><div><b>🤖 자동 추정 확인 ${unconfirmed.length}건</b><span class="tr-sub">썸네일 왼쪽 위 노란 의뢰서 표가 있으면 미완료로 봤어요. 틀린 건 카드 오른쪽 아래 버튼으로 바꿔 주세요.</span></div><button class="tr-btn" data-act="confirm-all">모두 맞음</button></section>`:""}
   ${viewGallery(s,items)}`;

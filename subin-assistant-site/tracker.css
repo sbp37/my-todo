@@ -75,9 +75,25 @@ body.tr-on{overflow:hidden}
 .tr-stats{display:grid;grid-template-columns:repeat(4,1fr);gap:4px;padding:14px 10px}
 .tr-stat{display:grid;gap:2px;text-align:center;padding:0 4px;border-left:1px solid var(--line-2)}
 .tr-stat:first-child{border-left:0}
-.tr-stat small{font-size:var(--fs-xs);color:var(--muted);font-weight:600}
-.tr-stat b{font-size:20px;font-weight:700}
-.tr-stat span{font-size:var(--fs-xs);color:var(--muted)}
+.tr-stat small{font-size:var(--fs-sm);color:var(--muted);font-weight:600}
+.tr-stat b{font-size:22px;font-weight:800}
+.tr-stat span{font-size:14px;font-weight:600;color:var(--ink-2)}
+/* 중요한 숫자(남음 등)는 강조색 굵게 */
+.tr-em{font-style:normal;font-weight:800;color:var(--tr)}
+/* 시즌 상단: 묶음 반영하면 (접기) */
+.tr-ustats{grid-column:1/-1;margin:10px 4px 0;padding-top:10px;border-top:1px dashed var(--line)}
+.tr-ustats-head{display:flex;align-items:center;gap:8px;flex-wrap:wrap;width:100%;border:0;background:none;padding:0 4px;text-align:left;font-size:var(--fs-md)}
+.tr-ustats-head span{font-size:var(--fs-sm);color:var(--muted)}
+.tr-ustats-head .tr-ustats-sum{margin-left:auto;font-size:14px;font-weight:600;color:var(--ink-2)}
+.tr-ustats.closed .tr-caret{transform:rotate(-90deg)}
+.tr-ustats.closed .tr-ustats-row{display:none}
+.tr-ustats-row{display:grid;grid-template-columns:repeat(3,1fr);gap:4px;margin-top:10px;padding:10px 0 2px;border-radius:var(--r-md);background:rgba(248,236,223,.45)}
+.tr-ustats-row .tr-stat:first-child{border-left:0}
+/* 오늘 목표 아래 줄 */
+.tr-goal-files{font-size:14px;font-weight:600;color:var(--muted);margin-left:6px}
+.tr-goal-info{margin:8px 0 0;font-size:15px;color:var(--ink-2);line-height:1.5}
+.tr-goal-info b{font-weight:800}
+.tr-goal-note{display:block;font-size:var(--fs-sm);color:var(--muted);margin-top:2px}
 
 .tr-gauges{display:grid;grid-template-columns:repeat(auto-fill,minmax(240px,1fr));gap:8px}
 /* 컨셉 카드: 컨셉 색 연한 배경 + 컨셉 색 게이지, 개수·퍼센트 크게 */
@@ -90,6 +106,8 @@ body.tr-on{overflow:hidden}
 .tr-gauge-count b{font-size:24px;font-weight:800;color:var(--ink)}
 .tr-gauge-pct{font-size:24px;font-weight:800;color:var(--cc,var(--ink));line-height:1}
 .tr-gauge-pct small{font-size:14px;font-weight:700;margin-left:1px}
+.tr-gauge-units{margin-top:2px;font-size:13px;color:var(--ink-2)}
+.tr-gauge-units b{font-weight:800;color:color-mix(in srgb,var(--cc,#333) 75%,var(--ink))}
 .tr-gauge .tr-bar{background:rgba(255,255,255,.75);margin-top:8px}
 .tr-gauge .tr-bar i{background:var(--cc,var(--tr))}
 .tr-gauge.ok em{color:var(--ok)}
@@ -216,6 +234,11 @@ body.tr-on{overflow:hidden}
   .tr-hero{grid-template-columns:1fr;gap:12px}
   .tr-stats{grid-template-columns:repeat(2,1fr);row-gap:12px}
   .tr-stat:nth-child(3){border-left:0}
+  .tr-ustats-row{grid-template-columns:repeat(3,1fr)}
+  .tr-ustats-row .tr-stat:nth-child(3){border-left:1px solid var(--line-2)}
+  .tr-ustats-row .tr-stat b{font-size:18px}
+  .tr-ustats-row .tr-stat span{font-size:12px}
+  .tr-ustats-head .tr-ustats-sum{margin-left:0;width:100%}
   .tr-timer-body{grid-template-columns:auto 1fr}
   .tr-clock{grid-column:1/-1;font-size:34px;text-align:center}
   .tr-thumb.sm{width:72px}
