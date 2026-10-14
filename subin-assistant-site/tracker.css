@@ -129,6 +129,7 @@ body.tr-on{overflow:hidden}
 .tr-seg button{border:0;background:none;border-radius:999px;padding:5px 12px;font-size:var(--fs-sm);font-weight:600;color:var(--muted)}
 .tr-seg button.on{background:var(--ink);color:#fff}
 .tr-btn.on{background:var(--ink);border-color:var(--ink);color:#fff}
+.tr-icon-btn{width:34px;padding:0;font-size:16px}
 /* 묶음 줄 */
 .tr-glist{display:grid;gap:10px;padding:0 14px 14px}
 .tr-dsec.closed .tr-glist{display:none}
