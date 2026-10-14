@@ -117,25 +117,38 @@ function unitCounts(its,target,done){
 // 오늘 시간 예산: 근무 시간(기본 8:00~17:00, 점심 12~13)에서 남은 시간을 남은 건수로 똑같이 나눈다
 const hhmm=v=>{const r=/^(\d{1,2}):(\d{2})$/.exec(String(v||"").trim());return r?Number(r[1])*60+Number(r[2]):null};
 const clock=m=>`${Math.floor(m/60)}:${String(Math.round(m%60)).padStart(2,"0")}`;
-function workCfg(s){const w=s?.settings?.work||{},g=(k,d)=>hhmm(w[k])??d;let c={s:g("start",480),e:g("end",1020),ls:g("lunchStart",720),le:g("lunchEnd",780)};if(c.e<=c.s)c.e=c.s+540;if(!(c.ls<c.le))c.ls=c.le=c.e;return c}
+// 근무 시간 + 오늘 야근: 야근은 버튼 누른 시각부터 정한 끝 시각까지. 퇴근~야근 시작 사이는 쉼(점심처럼 계산에서 빠짐)
+function workCfg(s){
+  const w=s?.settings?.work||{},g=(k,d)=>hhmm(w[k])??d;let c={s:g("start",480),e:g("end",1020),ls:g("lunchStart",720),le:g("lunchEnd",780)};
+  if(c.e<=c.s)c.e=c.s+540;if(!(c.ls<c.le))c.ls=c.le=c.e;
+  c.end0=c.e;c.breaks=c.ls<c.le?[[c.ls,c.le]]:[];
+  const ot=s?.settings?.overtime;
+  if(ot&&ot.date===todayISO()){const os=hhmm(ot.start),oe=hhmm(ot.end);if(os!=null&&oe!=null&&oe>Math.max(os,c.end0)){c.ot={s:Math.max(os,c.end0),e:oe};if(c.ot.s>c.end0)c.breaks.push([c.end0,c.ot.s]);c.e=oe}}
+  return c;
+}
 const seoulMin=ts=>{const p=new Intl.DateTimeFormat("en-GB",{timeZone:"Asia/Seoul",hour:"2-digit",minute:"2-digit",second:"2-digit",hour12:false}).formatToParts(ts?new Date(ts):new Date()),v=t=>+p.find(x=>x.type===t).value;return (v("hour")%24)*60+v("minute")+v("second")/60};
 // a~b 사이의 근무 분 (점심 제외)
-function workBetween(a,b,c){if(b<=a)return 0;const ov=(x,y)=>Math.max(0,Math.min(b,y)-Math.max(a,x));return ov(c.s,c.e)-ov(Math.max(c.s,c.ls),Math.min(c.e,c.le))}
+function workBetween(a,b,c){if(b<=a)return 0;const ov=(x,y)=>Math.max(0,Math.min(b,y)-Math.max(a,x));return ov(c.s,c.e)-c.breaks.reduce((t,[x,y])=>t+ov(Math.max(c.s,x),Math.min(c.e,y)),0)}
 // t부터 근무 시간으로 mins분 지난 시각 (점심 건너뜀)
-function addWork(t,mins,c){let x=Math.max(t,c.s);if(x>=c.ls&&x<c.le)x=c.le;if(x<c.ls){const room=c.ls-x;if(mins<=room)return x+mins;mins-=room;x=c.le}return x+mins}
-function clockSegs(a,b,c){if(b<=a)return[];if(b<=c.ls||a>=c.le)return[[a,b]];const out=[];if(a<c.ls)out.push([a,c.ls]);if(b>c.le)out.push([Math.max(a,c.le),b]);return out}
+function addWork(t,mins,c){let x=Math.max(t,c.s);for(const [b0,b1] of c.breaks){if(x>=b1)continue;if(x>=b0){x=b1;continue}const room=b0-x;if(mins<=room)return x+mins;mins-=room;x=b1}return x+mins}
+function clockSegs(a,b,c){let out=[[a,b]];for(const [b0,b1] of c.breaks)out=out.flatMap(([x,y])=>y<=b0||x>=b1?[[x,y]]:[[x,Math.min(y,b0)],[Math.max(x,b1),y]]);return out.filter(([x,y])=>y>x)}
 // 지금 하는 건: 마지막으로 끝낸 시각부터 퇴근까지 ÷ 남은 건수. 빨리 끝내면 다음 칸이 늘고, 늦으면 줄어든다
 function timePlan(s,p){
-  const c=workCfg(s),now=seoulMin(),total=workBetween(c.s,c.e,c);
+  const c=workCfg(s),now=seoulMin();
   const doneU=[...p.doneTodayU].sort((a,b)=>(a.completedAt||"").localeCompare(b.completedAt||""));
   const ends=doneU.map(u=>Math.min(c.e,Math.max(c.s,seoulMin(u.completedAt))));
-  const R=Math.max(0,p.goal-doneU.length),base=p.goal?total/p.goal:0;
-  let slotStart=Math.max(c.s,ends.length?ends[ends.length-1]:c.s);if(slotStart>=c.ls&&slotStart<c.le)slotStart=c.le;
+  const R=Math.max(0,p.goal-doneU.length);
+  let slotStart=Math.max(c.s,ends.length?ends[ends.length-1]:c.s);for(const [b0,b1] of c.breaks)if(slotStart>=b0&&slotStart<b1)slotStart=b1;
+  // 야근 중이면 야근 시작부터 새로 나눈다 (낮에 남은 초과를 끌고 오지 않게)
+  if(c.ot&&now>=c.end0)slotStart=Math.max(slotStart,c.ot.s);
   const slotLen=R?workBetween(slotStart,c.e,c)/R:0,slotEnd=addWork(slotStart,slotLen,c);
   const used=workBetween(slotStart,Math.min(Math.max(now,slotStart),c.e),c),slotLeft=slotLen-used;
   const nowRem=workBetween(Math.max(now,c.s),c.e,c);
-  const phase=now<c.s?"before":now>=c.e?"after":now>=c.ls&&now<c.le?"lunch":"work";
-  return {c,now,total,base,R,slotStart,slotLen,slotEnd,used,slotLeft,nowRem,ends,doneU,phase,nextEach:R>1?nowRem/(R-1):null};
+  const inBreak=c.breaks.find(([b0,b1])=>now>=b0&&now<b1);
+  const phase=now<c.s?"before":now>=c.e?"after":inBreak?(inBreak[0]===c.ls?"lunch":"gap"):"work";
+  // 목표는 정규 근무(아침 기준)로, 야근 중이면 표시만 야근 끝까지
+  return {c,now,total:workBetween(c.s,c.end0,c),base:p.goal?workBetween(c.s,c.end0,c)/p.goal:0,R,slotStart,slotLen,slotEnd,used,slotLeft,nowRem,ends,doneU,phase,
+    overtime:!!c.ot&&now>=c.ot.s&&now<c.e,extra:Math.max(0,doneU.length-p.goal),nextEach:R>1?nowRem/(R-1):null};
 }
 const fmtDur=m=>{m=Math.max(0,Math.round(m));const h=Math.floor(m/60),r=m%60;return h?`${h}시간${r?` ${r}분`:""}`:`${r}분`};
 function seasonStats(s){
@@ -705,25 +718,34 @@ function goalBar(p){
   const tomorrow=!st.leftTomorrow?`<span class="tr-goal-tomorrow">⚠️ 오늘이 마지막 제작일이에요</span>`:met?`<span class="tr-goal-tomorrow ok">오늘 목표 채웠어요 → 내일 목표 <b>${p.tomorrowIfStop}</b>건</span>`:`<span class="tr-goal-tomorrow">오늘 더 못 하면 → 내일 목표 <b class="tr-em">${p.tomorrowIfStop}</b>건 · 오늘 목표 채우면 → <b>${p.tomorrowIfGoal}</b>건</span>`;
   return `<section class="card tr-card tr-goal"><div class="tr-goal-head"><div><div class="tr-eyebrow">오늘 목표</div><h3><b>${done}</b> / ${p.goal}건${p.goalFiles!==p.goal?` <small class="tr-goal-files">파일 ${files} / ${p.goalFiles}개</small>`:""}</h3></div></div><div class="tr-bar"><i style="width:${pct}%"></i></div><p class="tr-goal-info">${st.overdue?"⚠️ 제작 마감이 지났어요. 남은 걸 오늘 몫으로 잡았어요.":`제작 마감 ${md(st.end)}까지 <b>${st.left}</b>일 · ${left}`}${met?" · 🎉 오늘 목표 달성!":""}${tomorrow}${p.carry?`<span class="tr-goal-note">지난 작업일에 밀린 ${p.carry}건은 한꺼번에 얹지 않고 남은 날에 나눠 담았어요</span>`:""}${st.bundles?`<span class="tr-goal-note">묶음은 1건으로 세요 · 묶음 안 의뢰서가 다 끝나야 완료</span>`:""}</p></section>`;
 }
-// 오늘 시간표: 지금 하는 건에 남은 시간(크게) + 출근~퇴근 타임라인 (끝낸 칸 · 지금 칸 · 남은 칸 · 점심)
+// 오늘 시간표: 지금 하는 건에 남은 시간(크게) + 출근~퇴근(야근) 타임라인 (끝낸 칸 · 지금 칸 · 남은 칸 · 점심·쉼)
 function timeCard(s,p){
   if(!p.workday||!p.goal)return"";
   const t=timePlan(s,p),c=t.c,span=c.e-c.s,pos=m=>Math.max(0,Math.min(100,(m-c.s)/span*100));
-  const m=v=>`${Math.max(0,Math.round(v))}분`,over=t.slotLeft<0;
-  let big,sub;
+  const m=v=>fmtDur(v),over=t.R&&t.slotLeft<0;
+  const otBtns=(label)=>`<div class="tr-ot"><span>${label}</span>${[60,120,180].map(x=>`<button class="tr-btn sm" data-ot="${x}">${x/60}시간</button>`).join("")}<button class="tr-btn sm ghost" data-ot="pick">직접</button></div>`;
+  let big,sub,extraUI="";
   if(t.phase==="before"){big=`${clock(c.s)} 시작`;sub=`오늘 ${t.R}건 · 건당 약 <b>${m(t.base)}</b>`}
-  else if(t.phase==="after"){big=t.R?"퇴근 시간이 지났어요":"오늘 몫 끝! 🎉";sub=t.R?`남은 ${t.R}건은 내일 목표에 나눠 담겨요`:"푹 쉬어요"}
-  else if(!t.R){big="오늘 몫 끝! 🎉";sub=`퇴근까지 <b>${m(t.nowRem)}</b> 자유`}
+  else if(t.phase==="after"){
+    if(t.R){big="퇴근 시간이 지났어요";sub=`남은 ${t.R}건은 내일 목표에 나눠 담겨요 (지금이면 내일 <b>${p.tomorrowIfStop}</b>건)`;extraUI=otBtns("🌙 더 할래요")}
+    else{big="오늘 몫 끝! 🎉";sub=t.extra?`목표보다 <b class="tr-ok">+${t.extra}건</b> 더 했어요 · 내일 목표 <b>${p.tomorrowIfStop}</b>건`:`푹 쉬어요 · 더 하면 내일이 가벼워져요 (내일 목표 <b>${p.tomorrowIfStop}</b>건)`;extraUI=otBtns("🌙 조금 더 할래요")}
+  }
+  else if(!t.R){
+    big=t.overtime?"🌙 보너스 타임":"오늘 몫 끝! 🎉";
+    sub=`${t.overtime?`야근 끝(${clock(c.e)})까지`:"퇴근까지"} <b>${m(t.nowRem)}</b>${t.extra?` · 목표보다 <b class="tr-ok">+${t.extra}건</b>`:""} · 하나 더 할 때마다 내일 목표가 줄어요 (지금 내일 <b>${p.tomorrowIfStop}</b>건)`;
+  }
   else{
     big=over?`<span class="tr-over">+${m(-t.slotLeft)} 초과</span>`:`남은 <b data-budget>${m(t.slotLeft)}</b>`;
     const diff=Math.round(t.slotLen-t.base);
-    sub=`이 건에 쓸 시간 <b>${m(t.slotLen)}</b>${Math.abs(diff)>=1?` <span class="${diff>0?"tr-ok":"tr-em"}">(아침보다 ${diff>0?"+":""}${diff}분)</span>`:""}${t.nextEach?` · 지금 끝내면 남은 ${t.R-1}건에 <b>${m(t.nextEach)}</b>씩`:" · 이게 오늘 마지막이에요"}`;
+    sub=`이 건에 쓸 시간 <b>${m(t.slotLen)}</b>${!t.overtime&&Math.abs(diff)>=1?` <span class="${diff>0?"tr-ok":"tr-em"}">(아침보다 ${diff>0?"+":""}${diff}분)</span>`:""}${t.nextEach?` · 지금 끝내면 남은 ${t.R-1}건에 <b>${m(t.nextEach)}</b>씩`:" · 이게 오늘 마지막이에요"}`;
     if(t.phase==="lunch")sub=`🍚 점심시간 · ${clock(c.le)}부터 다시 · `+sub;
+    if(t.phase==="gap")sub=`☕ 쉬는 중 · ${clock(c.ot.s)}부터 야근 · `+sub;
   }
-  // 타임라인
+  // 타임라인 (야근이면 끝까지 늘어나고 야근 구간은 남색 바탕)
   const seg=(a,b2,cls,title="")=>clockSegs(a,b2,c).map(([x,y])=>`<i class="tr-tl-seg ${cls}" style="left:${pos(x)}%;width:${Math.max(.4,pos(y)-pos(x))}%" title="${esc(title)}"></i>`).join("");
-  let bars=`<i class="tr-tl-lunch" style="left:${pos(c.ls)}%;width:${pos(c.le)-pos(c.ls)}%"></i>`;
-  t.ends.forEach((e,i)=>{const st=i?t.ends[i-1]:c.s,u=t.doneU[i];bars+=seg(st,e,"done",`${clock(e)} 완료 · ${u.group?u.group.name:u.items[0].code}`)});
+  let bars=c.breaks.map(([x,y])=>`<i class="tr-tl-lunch ${x===c.ls?"":"gap"}" style="left:${pos(x)}%;width:${pos(y)-pos(x)}%"></i>`).join("");
+  if(c.ot)bars=`<i class="tr-tl-ot" style="left:${pos(c.ot.s)}%;width:${pos(c.ot.e)-pos(c.ot.s)}%"></i>`+bars;
+  t.ends.forEach((e,i)=>{const st=i?t.ends[i-1]:c.s,u=t.doneU[i];bars+=seg(st,e,i>=p.goal?"done bonus":"done",`${clock(e)} 완료 · ${u.group?u.group.name:u.items[0].code}`)});
   if(t.R&&t.phase!=="after"){
     const curEnd=Math.min(c.e,t.slotEnd);
     bars+=seg(t.slotStart,curEnd,"cur","지금 하는 건");
@@ -731,9 +753,28 @@ function timeCard(s,p){
     const fs=Math.max(curEnd,over?t.now:curEnd),each=t.R>1?workBetween(fs,c.e,c)/(t.R-1):0;
     for(let k=0;k<t.R-1;k++)bars+=seg(addWork(fs,each*k,c),Math.min(c.e,addWork(fs,each*(k+1),c)),"next");
   }
-  const ticks=[];for(let h=Math.ceil(c.s/60);h*60<=c.e;h++)ticks.push(`<span style="left:${pos(h*60)}%">${h}</span>`);
+  const ticks=[],step=span>720?2:1;for(let h=Math.ceil(c.s/60);h*60<=c.e;h+=step)ticks.push(`<span style="left:${pos(h*60)}%">${h}</span>`);
   const nowMark=t.now>=c.s&&t.now<=c.e?`<b class="tr-tl-now" style="left:${pos(t.now)}%"><em>${clock(Math.floor(t.now))}</em></b>`:"";
-  return `<section class="card tr-card tr-timecard ${over&&t.phase==="work"?"over":""}"><div class="tr-time-head"><div><div class="tr-eyebrow">⏱ 지금 하는 건</div><div class="tr-time-big">${big}</div></div><span class="tr-time-hours">${clock(c.s)}–${clock(c.e)} · 점심 ${clock(c.ls)}–${clock(c.le)}</span></div><p class="tr-time-sub">${sub}</p><div class="tr-tl"><div class="tr-tl-track">${bars}${nowMark}</div><div class="tr-tl-ticks">${ticks.join("")}</div></div><div class="tr-tl-legend"><span><i class="done"></i>끝낸 것</span><span><i class="cur"></i>지금</span><span><i class="next"></i>남은 칸</span><span><i class="lunch"></i>점심</span></div></section>`;
+  const otInfo=c.ot?` · 🌙 야근 ${clock(c.ot.s)}–${clock(c.ot.e)}`:"";
+  const otCtl=t.overtime||t.phase==="gap"?`<div class="tr-ot"><span>🌙 야근 중 · ${clock(c.ot.e)}까지</span><button class="tr-btn sm" data-ot="ext">+1시간</button><button class="tr-btn sm ghost" data-ot="end">야근 끝</button></div>`:"";
+  return `<section class="card tr-card tr-timecard ${over&&t.phase==="work"?"over":""} ${t.overtime?"ot":""}"><div class="tr-time-head"><div><div class="tr-eyebrow">${t.overtime?"🌙 야근 중 · ":"⏱ "}지금 하는 건</div><div class="tr-time-big">${big}</div></div><span class="tr-time-hours">${clock(c.s)}–${clock(c.end0)} · 점심 ${clock(c.ls)}–${clock(c.le)}${otInfo}</span></div><p class="tr-time-sub">${sub}</p>${extraUI}${otCtl}<div class="tr-tl"><div class="tr-tl-track">${bars}${nowMark}</div><div class="tr-tl-ticks">${ticks.join("")}</div></div><div class="tr-tl-legend"><span><i class="done"></i>끝낸 것</span><span><i class="cur"></i>지금</span><span><i class="next"></i>남은 칸</span><span><i class="lunch"></i>점심·쉼</span>${c.ot?`<span><i class="ot"></i>야근</span>`:""}</div></section>`;
+}
+// 야근 시작·연장·끝 (오늘 날짜로 시즌 설정에 저장 → 맥·폰 같이)
+async function setOvertime(kind){
+  const s=season();if(!s)return;
+  const c=workCfg(s),now=Math.floor(seoulMin()),cur=s.settings?.overtime?.date===todayISO()?s.settings.overtime:null;
+  const fmt=v=>`${String(Math.floor(v/60)).padStart(2,"0")}:${String(v%60).padStart(2,"0")}`,cap=v=>Math.min(1439,v);
+  let ot=null;
+  if(kind==="end"){if(!cur)return;ot={...cur,end:fmt(Math.max(now,hhmm(cur.start)+1))}}
+  else if(kind==="ext"){if(!cur)return;ot={...cur,end:fmt(cap(hhmm(cur.end)+60))}}
+  else{
+    let end;
+    if(kind==="pick"){const v=prompt("야근 끝 시간 (예: 22:30)",fmt(cap(Math.max(now,c.end0)+120)));if(v===null)return;end=hhmm(v);if(end==null||end<=now){toast("지금보다 늦은 시간으로 적어 주세요. 예: 22:30");return}}
+    else end=cap(Math.max(now,c.end0)+Number(kind));
+    ot={date:todayISO(),start:fmt(Math.max(now,c.end0)),end:fmt(end)};
+  }
+  await put({seasons:[{...s,settings:{...(s.settings||{}),overtime:ot}}]});
+  toast(kind==="end"?"야근 끝! 수고했어요 🌙":`🌙 ${ot.end}까지 야근으로 다시 나눴어요`);
 }
 function timerCard(){
   const x=activeSession();if(!x)return"";const it=byId("items",x.item_id);if(!it)return"";
@@ -870,6 +911,7 @@ async function onClick(e){
   const d=b.dataset;
   if(d.view){TR.view=d.view;TR.selecting=false;TR.selected.clear();saveUI();if(sheet.open)sheet.close();render();main.scrollTo?.(0,0);return}
   if(d.ctab){TR.conceptTab=d.ctab;saveUI();render();return}
+  if(d.ot){await setOvertime(d.ot);return}
   if(d.zoom){TR.zoom=Math.min(ZOOMS.length,Math.max(1,TR.zoom+Number(d.zoom)));saveUI();render();return}
   if(d.collapse){TR.collapsed[d.collapse]=!TR.collapsed[d.collapse];saveUI();render();return}
   // 선택 모드에서는 카드를 누르면 열지 않고 체크만
@@ -905,6 +947,7 @@ async function onClick(e){
     case"thumb-pick":root.querySelector("#tr-thumb-file").click();break;
     case"sheet-close":sheet.close();break;
     case"similar":await arrangeSimilar();break;
+    default:break;
     case"select":TR.selecting=!TR.selecting;TR.selected.clear();render();break;
     case"group-make":{const s=season(),ids=[...TR.selected];if(!s||ids.length<2)break;TR.selecting=false;TR.selected.clear();await makeGroup(s,ids);break}
     case"group-out":{const ids=[...TR.selected],old=new Set(ids.map(id=>byId("items",id)?.group_id).filter(Boolean));TR.selecting=false;TR.selected.clear();await put({items:ids.map(id=>byId("items",id)).filter(i=>i?.group_id).map(i=>({...i,group_id:null}))});await dissolveSmallGroups(old);toast("묶음에서 뺐어요.");break}

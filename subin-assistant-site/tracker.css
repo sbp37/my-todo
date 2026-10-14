@@ -116,6 +116,13 @@ body.tr-on{overflow:hidden}
 .tr-tl-seg.overrun{background:repeating-linear-gradient(135deg,#e7908a 0 6px,#f3bdb7 6px 12px);border:1px solid var(--danger)}
 .tr-tl-seg.next{background:#fff;border:1.5px dashed #cbbfb1}
 .tr-tl-lunch{position:absolute;top:0;bottom:0;background:repeating-linear-gradient(135deg,#ddd5ca 0 4px,#ebe5dc 4px 8px);border-radius:4px}
+.tr-tl-lunch.gap{background:repeating-linear-gradient(135deg,#e6e1da 0 4px,#f1ede7 4px 8px)}
+.tr-tl-ot{position:absolute;top:0;bottom:0;background:#e5e3f3;border-radius:0 8px 8px 0}
+.tr-tl-seg.done.bonus{background:#5d9bc9}
+.tr-tl-legend .ot{background:#e5e3f3}
+.tr-timecard.ot{border-color:#c9c3e6;background:#fbfaff}
+.tr-ot{display:flex;align-items:center;flex-wrap:wrap;gap:6px;margin-top:10px;font-size:14px;font-weight:700;color:#4b4596}
+.tr-ot span{margin-right:4px}
 .tr-tl-now{position:absolute;top:-6px;bottom:-6px;width:2px;margin-left:-1px;background:var(--ink);border-radius:2px;z-index:2}
 .tr-tl-now em{position:absolute;top:-18px;left:50%;transform:translateX(-50%);font-style:normal;font-size:11px;font-weight:800;background:var(--ink);color:#fff;padding:1px 5px;border-radius:5px;white-space:nowrap}
 .tr-tl-ticks{position:relative;height:16px;margin-top:3px}
