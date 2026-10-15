@@ -377,7 +377,7 @@ async function fileToCanvas(f){return withTimeout(isDesign(f)?renderPdf(f):rende
 // 다시 저장한 파일을 올리면 새 버전으로 보고 완료 추정을 다시 한다 (확인 표시는 풀림)
 function applyEstimate(item,est,file,prev){
   item.auto_done=!est.hasForm;item.auto_score=est.score;item.confirmed=false;
-  item.status=est.hasForm?"todo":"done";
+  item.status=est.hasForm?"todo":"done";if(!est.hasForm)item.pinned_at=null;
   item.completed_at=est.hasForm?null:(prev&&isDone(prev)&&prev.completed_at?prev.completed_at:new Date(file.lastModified||Date.now()).toISOString());
   return item;
 }
