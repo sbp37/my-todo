@@ -27,7 +27,6 @@ const nowISO=()=>new Date().toISOString();
 const dayOf=ts=>ts?new Intl.DateTimeFormat("en-CA",{timeZone:"Asia/Seoul",year:"numeric",month:"2-digit",day:"2-digit"}).format(new Date(ts)):"";
 const hm=ts=>ts?new Intl.DateTimeFormat("ko-KR",{timeZone:"Asia/Seoul",hour:"2-digit",minute:"2-digit",hour12:false}).format(new Date(ts)).replace(/^24:/,"00:"):"";
 const md=iso=>{if(!iso)return"";const [,m,d]=iso.split("-").map(Number);return `${m}/${d}(${"일월화수목금토"[D.dow(iso)]})`};
-const mmss=ms=>{const s=Math.floor(ms/1000),h=Math.floor(s/3600),m=Math.floor(s%3600/60),x=s%60;return (h?h+":"+String(m).padStart(2,"0"):String(m).padStart(2,"0"))+":"+String(x).padStart(2,"0")};
 
 /* ---------- 데이터 접근 ---------- */
 const byId=(kind,id)=>TR.data[kind].find(x=>x.id===id);
@@ -35,7 +34,6 @@ const season=()=>byId("seasons",TR.seasonId)||TR.data.seasons.filter(s=>s.active
 const conceptsOf=sid=>TR.data.concepts.filter(c=>c.season_id===sid).sort((a,b)=>(a.sort??100)-(b.sort??100)||a.name.localeCompare(b.name));
 const itemsOf=sid=>TR.data.items.filter(i=>i.season_id===sid);
 const isDone=i=>i?.status==="done";
-const activeSession=()=>TR.data.sessions.find(x=>!x.ended_at);
 const typeName=(s,t)=>(s?.settings?.type_names||{})[t]||"";
 
 function applyRemote(r){
@@ -118,12 +116,12 @@ function unitCounts(its,target,done){
 const hhmm=v=>{const r=/^(\d{1,2}):(\d{2})$/.exec(String(v||"").trim());return r?Number(r[1])*60+Number(r[2]):null};
 const clock=m=>`${Math.floor(m/60)}:${String(Math.round(m%60)).padStart(2,"0")}`;
 // 근무 시간 + 오늘 야근: 야근은 버튼 누른 시각부터 정한 끝 시각까지. 퇴근~야근 시작 사이는 쉼(점심처럼 계산에서 빠짐)
-function workCfg(s){
+function workCfg(s,date=todayISO()){
   const w=s?.settings?.work||{},g=(k,d)=>hhmm(w[k])??d;let c={s:g("start",480),e:g("end",1020),ls:g("lunchStart",720),le:g("lunchEnd",780)};
   if(c.e<=c.s)c.e=c.s+540;if(!(c.ls<c.le))c.ls=c.le=c.e;
   c.end0=c.e;c.breaks=c.ls<c.le?[[c.ls,c.le]]:[];
   const ot=s?.settings?.overtime;
-  if(ot&&ot.date===todayISO()){const os=hhmm(ot.start),oe=hhmm(ot.end);if(os!=null&&oe!=null&&oe>Math.max(os,c.end0)){c.ot={s:Math.max(os,c.end0),e:oe};if(c.ot.s>c.end0)c.breaks.push([c.end0,c.ot.s]);c.e=oe}}
+  if(ot&&ot.date===date){const os=hhmm(ot.start),oe=hhmm(ot.end);if(os!=null&&oe!=null&&oe>Math.max(os,c.end0)){c.ot={s:Math.max(os,c.end0),e:oe};if(c.ot.s>c.end0)c.breaks.push([c.end0,c.ot.s]);c.e=oe}}
   return c;
 }
 const seoulMin=ts=>{const p=new Intl.DateTimeFormat("en-GB",{timeZone:"Asia/Seoul",hour:"2-digit",minute:"2-digit",second:"2-digit",hour12:false}).formatToParts(ts?new Date(ts):new Date()),v=t=>+p.find(x=>x.type===t).value;return (v("hour")%24)*60+v("minute")+v("second")/60};
@@ -176,11 +174,7 @@ function seasonStats(s){
     dday:s.deadline?D.diff(today,s.deadline):null,overdue:!!end&&today>end&&remaining>0};
 }
 function lastType(s){
-  const its=itemsOf(s.id),act=activeSession();
-  if(act)return byId("items",act.item_id)?.item_type||"";
-  const ses=TR.data.sessions.filter(x=>x.season_id===s.id).sort((a,b)=>b.started_at.localeCompare(a.started_at))[0];
-  if(ses)return byId("items",ses.item_id)?.item_type||"";
-  const last=its.filter(isDone).sort((a,b)=>(b.completed_at||"").localeCompare(a.completed_at||""))[0];
+  const last=itemsOf(s.id).filter(isDone).sort((a,b)=>(b.completed_at||"").localeCompare(a.completed_at||""))[0];
   return last?.item_type||"";
 }
 // 갤러리 순서: 직접 끌어서 정한 순서(sort_order) → 없으면 품목 코드순
@@ -262,6 +256,34 @@ function todayPlan(s){
     // 오늘 여기서 멈추면 / 오늘 목표를 채우면 내일 목표
     tomorrowIfStop:st.perDay(st.uRemaining),tomorrowIfGoal:st.perDay(Math.max(0,st.uRemaining-Math.max(0,goal-doneTodayU.length)))};
 }
+// 완료 예상일: 최근 제작일(오늘 빼고 최대 5일, 첫 완료일부터) 하루 평균 작업 수로 남은 작업을 이어 담아 본다
+function forecast(s,p){
+  const st=p.st,today=st.today;
+  if(!st.uRemaining)return {finished:true};
+  const doneU=st.units.filter(u=>u.done&&u.completedAt),first=doneU.map(u=>dayOf(u.completedAt)).sort()[0];
+  if(!first)return {pace:0,days:0};
+  const days=[];for(let d=D.add(today,-1),g=0;days.length<5&&g<60&&d>=first;g++,d=D.add(d,-1))if(isWorkday(s,d))days.push(d);
+  let n=doneU.filter(u=>days.includes(dayOf(u.completedAt))).length,k=days.length;
+  // 오늘 몫을 다 했거나 퇴근 뒤면 오늘도 속도에 넣는다
+  const c=workCfg(s),todayIn=p.workday&&(p.doneTodayU.length>=p.goal||seoulMin()>=c.e);
+  if(todayIn||!k){n+=p.doneTodayU.length;k++}
+  const pace=k?n/k:0;
+  if(!pace)return {pace:0,days:k};
+  let rem=st.uRemaining,d=today;
+  // 아직 오늘 일하는 중이면 오늘 남은 몫부터
+  if(!todayIn&&p.workday)rem-=Math.max(0,pace-p.doneTodayU.length);
+  for(let g=0;rem>1e-9&&g<400;g++){d=D.add(d,1);if(isWorkday(s,d))rem-=pace}
+  const end=st.end,spare=end&&d<=end?countWorkdays(s,D.add(d,1),end):null,late=end&&d>end?countWorkdays(s,D.add(end,1),d):null;
+  return {pace,days:k,date:d,spare,late};
+}
+function forecastLine(s,p){
+  const f=forecast(s,p),st=p.st;
+  if(f.finished)return `<p class="tr-forecast ok">🎉 시즌 의뢰서를 다 끝냈어요</p>`;
+  if(!f.pace)return `<p class="tr-forecast">📅 완료 기록이 쌓이면 지금 속도로 언제 끝나는지 보여드려요</p>`;
+  const pace=Math.round(f.pace*10)/10;
+  const tail=f.late!=null?` · <b class="tr-em">제작 마감보다 ${f.late}일 늦어요</b> · 하루 <b>${st.uNeed}</b>건씩 하면 맞출 수 있어요`:f.spare!=null?(f.spare?` · 제작 마감 ${md(st.end)}까지 <b class="tr-ok">${f.spare}일 여유</b> ✓`:` · 제작 마감 ${md(st.end)}에 딱 맞춰요`):"";
+  return `<p class="tr-forecast ${f.late!=null?"late":"ok"}">📅 지금 속도(하루 <b>${pace}</b>건)면 <b>${f.date===st.today?"오늘":md(f.date)}</b> 다 끝나요${tail}<small>최근 제작일 ${f.days}일 평균 · 묶음은 1건</small></p>`;
+}
 // 작업일이면 오늘 목표를 스냅샷으로 남겨서 다음 작업일 이월 계산에 쓴다
 let snapPending="";
 function saveSnapshot(s,p){
@@ -274,38 +296,22 @@ function saveSnapshot(s,p){
   queueMicrotask(async()=>{await put({days:[row]});snapPending=""});
 }
 
-/* ---------- 집중 타이머 ---------- */
-function elapsedMs(x){const end=x.ended_at?Date.parse(x.ended_at):Date.now();let p=Number(x.paused_ms)||0;if(x.pause_started_at&&!x.ended_at)p+=Date.now()-Date.parse(x.pause_started_at);return Math.max(0,end-Date.parse(x.started_at)-p)}
-function closeSession(x){const t=nowISO(),pm=(Number(x.paused_ms)||0)+(x.pause_started_at?Date.now()-Date.parse(x.pause_started_at):0);const done={...x,ended_at:t,paused_ms:pm,pause_started_at:null};done.focus_sec=Math.round(elapsedMs(done)/1000);return done}
-async function startFocus(itemId){
-  const it=byId("items",itemId);if(!it)return;
-  const act=activeSession();if(act?.item_id===itemId)return;
-  const rows=[];if(act)rows.push(closeSession(act));
-  rows.push({id:crypto.randomUUID(),item_id:itemId,season_id:it.season_id,started_at:nowISO(),ended_at:null,paused_ms:0,pause_started_at:null,focus_sec:0});
-  TR.view="today";saveUI();
-  await put({sessions:rows});
-}
-async function pauseFocus(){const x=activeSession();if(!x)return;if(x.pause_started_at)await put({sessions:[{...x,paused_ms:(Number(x.paused_ms)||0)+Date.now()-Date.parse(x.pause_started_at),pause_started_at:null}]});else await put({sessions:[{...x,pause_started_at:nowISO()}]})}
-async function stopFocus(){const x=activeSession();if(!x)return;const done=closeSession(x);if(done.focus_sec<10){await remove("sessions",x.id);return}await put({sessions:[done]})}
+/* ---------- 완료 · 걸린 시간 ---------- */
 async function setDone(itemId,done){
   const it=byId("items",itemId);if(!it)return;
-  const rows={items:[{...it,status:done?"done":"todo",completed_at:done?nowISO():null,confirmed:true,pinned_at:done?null:it.pinned_at}],sessions:[]};
-  const act=activeSession();
-  let drop=null;
-  if(done&&act?.item_id===itemId){const c=closeSession(act);if(c.focus_sec<10)drop=act.id;else rows.sessions.push(c)}
   if(done)TR.skip=0;
-  if(drop)await remove("sessions",drop);
-  await put(rows);
-  if(done)toast(`✓ ${it.code} 완료${recordLine(byId("items",itemId))?" · "+recordLine(byId("items",itemId)):""}`);
+  await put({items:[{...it,status:done?"done":"todo",completed_at:done?nowISO():null,confirmed:true,pinned_at:done?null:it.pinned_at}]});
+  if(done){const n=itemMinutes(byId("items",itemId));toast(`✓ ${it.code} 완료${n?` · ${fmtDur(n)} 걸렸어요`:""}`)}
 }
-// 완료 기록: 14:05 ~ 14:17 · 집중 12분 (+ 여러 날 나눠 했으면 누적)
-function recordLine(it){
-  if(!it?.completed_at)return"";
-  const day=dayOf(it.completed_at),ss=TR.data.sessions.filter(x=>x.item_id===it.id&&x.ended_at).sort((a,b)=>a.started_at.localeCompare(b.started_at));
-  const todays=ss.filter(x=>dayOf(x.started_at)===day),total=ss.reduce((a,x)=>a+(x.focus_sec||0),0),dayFocus=todays.reduce((a,x)=>a+(x.focus_sec||0),0);
-  if(!todays.length)return total?`${hm(it.completed_at)} 완료 · 누적 ${Math.round(total/60)}분`:`${hm(it.completed_at)} 완료`;
-  return `${hm(todays[0].started_at)} ~ ${hm(it.completed_at)} · 집중 ${Math.round(dayFocus/60)}분${total>dayFocus+30?` · 누적 ${Math.round(total/60)}분`:""}`;
+// 걸린 시간 = 그날 바로 앞에 끝낸 것(없으면 출근)부터 이걸 끝낸 시각까지의 근무 분 (점심·쉼 제외). 묶음 복붙처럼 이어서 끝내면 0에 가깝다
+function dayMinutes(s,day){
+  const c=workCfg(s,day),out=new Map();let prev=c.s;
+  itemsOf(s.id).filter(i=>isDone(i)&&i.completed_at&&dayOf(i.completed_at)===day).sort((a,b)=>a.completed_at.localeCompare(b.completed_at)).forEach(i=>{const t=Math.min(c.e,Math.max(c.s,seoulMin(i.completed_at)));out.set(i.id,workBetween(prev,t,c));prev=Math.max(prev,t)});
+  return out;
 }
+function itemMinutes(it){const s=it&&byId("seasons",it.season_id);return s&&it.completed_at?Math.round(dayMinutes(s,dayOf(it.completed_at)).get(it.id)||0):0}
+// 완료 기록: 14:17 완료 · 12분
+function recordLine(it){if(!it?.completed_at)return"";const n=itemMinutes(it);return `${hm(it.completed_at)} 완료${n?` · ${fmtDur(n)}`:""}`}
 
 /* ---------- 파일 → 썸네일 + 자동 분류 ---------- */
 let pdfjsP=null;
@@ -683,11 +689,10 @@ function openTracker(){
   render();
   if(!getApiKey()){return}
   refresh();
-  // 1초마다 타이머, 30초마다 오늘 화면을 다시 그려서 시간표(남은 분·지금 위치)가 흐르게
-  let sec=0;clearInterval(tick);tick=setInterval(()=>{if(!TR.open)return;updateTimers();if(++sec%30===0&&TR.view==="today"&&!sheet.open&&!TR.dragging&&!TR.selecting)render()},1000);
+  // 30초마다 오늘 화면을 다시 그려서 시간표(남은 분·지금 위치)가 흐르게
+  clearInterval(tick);tick=setInterval(()=>{if(TR.open&&TR.view==="today"&&!sheet.open&&!TR.dragging&&!TR.selecting)render()},30000);
 }
 function closeTracker(){TR.open=false;if(root)root.hidden=true;document.body.classList.remove("tr-on");clearInterval(tick);if(location.hash==="#tracker")history.replaceState(null,"",location.pathname+location.search)}
-function updateTimers(){const x=activeSession();root.querySelectorAll("[data-tick]").forEach(el=>{el.textContent=x?mmss(elapsedMs(x)):"00:00"})}
 
 function render(){
   if(!root||!TR.open||TR.dragging)return;
@@ -702,7 +707,6 @@ function render(){
   main.innerHTML=TR.view==="season"?viewSeason(s):TR.view==="log"?viewLog(s):TR.view==="settings"?viewSettings(s):viewToday(s);
   root.style.setProperty("--tr-top-h",root.querySelector(".tr-top").offsetHeight+"px");
   if(TR.view==="season")bindSortables();else if(sortables.length){sortables.forEach(x=>x.destroy());sortables=[]}
-  updateTimers();
   if(TR.detail&&sheet.open)renderSheet();
 }
 function seasonSetup(){
@@ -726,10 +730,6 @@ function timeCard(s,p){
   const otBtns=(label)=>`<div class="tr-ot"><span>${label}</span>${[60,120,180].map(x=>`<button class="tr-btn sm" data-ot="${x}">${x/60}시간</button>`).join("")}<button class="tr-btn sm ghost" data-ot="pick">직접</button></div>`;
   let big,sub,extraUI="";
   if(t.phase==="before"){big=`${clock(c.s)} 시작`;sub=`오늘 ${t.R}건 · 건당 약 <b>${m(t.base)}</b>`}
-  else if(t.phase==="after"){
-    if(t.R){big="퇴근 시간이 지났어요";sub=`남은 ${t.R}건은 내일 목표에 나눠 담겨요 (지금이면 내일 <b>${p.tomorrowIfStop}</b>건)`;extraUI=otBtns("🌙 더 할래요")}
-    else{big="오늘 몫 끝! 🎉";sub=t.extra?`목표보다 <b class="tr-ok">+${t.extra}건</b> 더 했어요 · 내일 목표 <b>${p.tomorrowIfStop}</b>건`:`푹 쉬어요 · 더 하면 내일이 가벼워져요 (내일 목표 <b>${p.tomorrowIfStop}</b>건)`;extraUI=otBtns("🌙 조금 더 할래요")}
-  }
   else if(!t.R){
     big=t.overtime?"🌙 보너스 타임":"오늘 몫 끝! 🎉";
     sub=`${t.overtime?`야근 끝(${clock(c.e)})까지`:"퇴근까지"} <b>${m(t.nowRem)}</b>${t.extra?` · 목표보다 <b class="tr-ok">+${t.extra}건</b>`:""} · 하나 더 할 때마다 내일 목표가 줄어요 (지금 내일 <b>${p.tomorrowIfStop}</b>건)`;
@@ -755,9 +755,25 @@ function timeCard(s,p){
   }
   const ticks=[],step=span>720?2:1;for(let h=Math.ceil(c.s/60);h*60<=c.e;h+=step)ticks.push(`<span style="left:${pos(h*60)}%">${h}</span>`);
   const nowMark=t.now>=c.s&&t.now<=c.e?`<b class="tr-tl-now" style="left:${pos(t.now)}%"><em>${clock(Math.floor(t.now))}</em></b>`:"";
+  const tl=`<div class="tr-tl"><div class="tr-tl-track">${bars}${nowMark}</div><div class="tr-tl-ticks">${ticks.join("")}</div></div><div class="tr-tl-legend"><span><i class="done"></i>끝낸 것</span><span><i class="cur"></i>지금</span><span><i class="next"></i>남은 칸</span><span><i class="lunch"></i>점심·쉼</span>${c.ot?`<span><i class="ot"></i>야근</span>`:""}</div>`;
+  if(t.phase==="after")return dayEndCard(s,p,t,tl,otBtns(t.R?"🌙 더 할래요":"🌙 조금 더 할래요"));
   const otInfo=c.ot?` · 🌙 야근 ${clock(c.ot.s)}–${clock(c.ot.e)}`:"";
   const otCtl=t.overtime||t.phase==="gap"?`<div class="tr-ot"><span>🌙 야근 중 · ${clock(c.ot.e)}까지</span><button class="tr-btn sm" data-ot="ext">+1시간</button><button class="tr-btn sm ghost" data-ot="end">야근 끝</button></div>`:"";
-  return `<section class="card tr-card tr-timecard ${over&&t.phase==="work"?"over":""} ${t.overtime?"ot":""}"><div class="tr-time-head"><div><div class="tr-eyebrow">${t.overtime?"🌙 야근 중 · ":"⏱ "}지금 하는 건</div><div class="tr-time-big">${big}</div></div><span class="tr-time-hours">${clock(c.s)}–${clock(c.end0)} · 점심 ${clock(c.ls)}–${clock(c.le)}${otInfo}</span></div><p class="tr-time-sub">${sub}</p>${extraUI}${otCtl}<div class="tr-tl"><div class="tr-tl-track">${bars}${nowMark}</div><div class="tr-tl-ticks">${ticks.join("")}</div></div><div class="tr-tl-legend"><span><i class="done"></i>끝낸 것</span><span><i class="cur"></i>지금</span><span><i class="next"></i>남은 칸</span><span><i class="lunch"></i>점심·쉼</span>${c.ot?`<span><i class="ot"></i>야근</span>`:""}</div></section>`;
+  return `<section class="card tr-card tr-timecard ${over&&t.phase==="work"?"over":""} ${t.overtime?"ot":""}"><div class="tr-time-head"><div><div class="tr-eyebrow">${t.overtime?"🌙 야근 중 · ":"⏱ "}지금 하는 건</div><div class="tr-time-big">${big}</div></div><span class="tr-time-hours">${clock(c.s)}–${clock(c.end0)} · 점심 ${clock(c.ls)}–${clock(c.le)}${otInfo}</span></div><p class="tr-time-sub">${sub}</p>${extraUI}${otCtl}${tl}</section>`;
+}
+// 퇴근(야근 끝) 뒤: 오늘 N건 완료 · 건당 M분 · 내일 목표 K건 + 오늘 타임라인
+function dayEndCard(s,p,t,tl,otUI){
+  const c=t.c,st=p.st,n=t.doneU.length,files=p.doneToday.length;
+  const durs=t.ends.map((e,i)=>({u:t.doneU[i],m:workBetween(i?t.ends[i-1]:c.s,e,c)}));
+  const avg=n?workBetween(c.s,t.ends[n-1],c)/n:0;
+  const fast=n>1?durs.filter(x=>x.m>=1).sort((a,b)=>a.m-b.m)[0]:null;
+  const nextLabel=p.nextWorkday&&p.nextWorkday!==D.add(st.today,1)?`다음 작업일 ${md(p.nextWorkday)}`:"내일 목표";
+  const tomorrow=!st.uRemaining?`<b class="tr-ok">끝!</b>`:st.leftTomorrow?`<b>${p.tomorrowIfStop}</b>건`:`<b class="tr-em">${st.uRemaining}</b>건`;
+  const tomorrowSub=!st.uRemaining?"시즌 의뢰서 전부 완료":!st.leftTomorrow?"제작일이 안 남았어요":t.R?`오늘 못 한 ${t.R}건 나눠 담음`:t.extra?`더 한 ${t.extra}건만큼 줄었어요`:`남은 ${st.uRemaining}건 ÷ ${st.leftTomorrow}일`;
+  const head=!n?"오늘은 완료한 게 없어요":t.R?`오늘 ${n}건 완료`:t.extra?`오늘 ${n}건 완료 · 목표보다 +${t.extra} 🎉`:`오늘 몫 다 했어요 🎉`;
+  return `<section class="card tr-card tr-dayend"><div class="tr-eyebrow">🌇 오늘 마무리 · ${md(st.today)}${c.ot?` · 🌙 야근 ${clock(c.ot.s)}–${clock(c.ot.e)}`:""}</div><h3 class="tr-dayend-title">${head}</h3>
+  <div class="tr-dayend-stats"><div><small>오늘 완료</small><b><span class="tr-ok">${n}</span> / ${p.goal}건</b><span>${files!==n?`파일 ${files}개`:t.R?`${t.R}건 남음`:"목표 달성 ✓"}</span></div><div><small>건당</small><b>${n?fmtDur(avg).replace(/시간|분/g,x=>`<small>${x}</small>`):"–"}</b><span>${n?`아침 계획 ${fmtDur(t.base)}`:"출근부터 마지막 완료까지"}</span></div><div><small>${nextLabel}</small><b>${tomorrow}</b><span>${tomorrowSub}</span></div></div>
+  ${fast?`<p class="tr-time-sub">⚡ 제일 빨리 끝낸 건 <b>${esc(fast.u.group?fast.u.group.name:fast.u.items[0].code)}</b> ${fmtDur(fast.m)}</p>`:""}${forecastLine(s,p)}${otUI}${tl}</section>`;
 }
 // 야근 시작·연장·끝 (오늘 날짜로 시즌 설정에 저장 → 맥·폰 같이)
 async function setOvertime(kind){
@@ -776,30 +792,23 @@ async function setOvertime(kind){
   await put({seasons:[{...s,settings:{...(s.settings||{}),overtime:ot}}]});
   toast(kind==="end"?"야근 끝! 수고했어요 🌙":`🌙 ${ot.end}까지 야근으로 다시 나눴어요`);
 }
-function timerCard(){
-  const x=activeSession();if(!x)return"";const it=byId("items",x.item_id);if(!it)return"";
-  return `<section class="card tr-card tr-timer ${x.pause_started_at?"paused":""}"><div class="tr-timer-body"><button class="tr-thumb-btn" data-open="${esc(it.id)}">${thumbHTML(it,"sm")}</button><div><div class="tr-eyebrow">${x.pause_started_at?"⏸ 일시정지":"● 집중 중"} · ${hm(x.started_at)} 시작</div><h3>${esc(it.code)}</h3><div class="tr-sub">${esc(conceptName(it.concept_id))}</div></div><div class="tr-clock" data-tick>00:00</div></div><div class="tr-actions"><button class="tr-btn" data-act="pause">${x.pause_started_at?"▶ 재개":"⏸ 일시정지"}</button><button class="tr-btn" data-act="stop">■ 종료</button><button class="tr-btn primary" data-tdone="${esc(it.id)}">✓ 완료</button></div></section>`;
-}
 function heroCard(s,p){
-  const act=activeSession();
   // 오늘 몫을 다 했으면 다음 작업일 것 중에서 "하나 더"를 보여준다
-  const extra=!p.next.filter(id=>id!==act?.item_id).length&&p.st.uRemaining>0;
-  const pool=(extra?p.order.map(i=>i.id):p.next).filter(id=>id!==act?.item_id);
-  if(!pool.length&&act)return"";
+  const extra=!p.next.length&&p.st.uRemaining>0;
+  const pool=extra?p.order.map(i=>i.id):p.next;
   if(!pool.length)return p.st.target?`<section class="card tr-card tr-hero"><div class="tr-eyebrow">지금 이거부터</div><h3>${p.st.uRemaining?"오늘 몫은 다 끝냈어요 🎉":"시즌 의뢰서를 전부 끝냈어요 🎉"}</h3><p class="tr-sub">${p.st.uRemaining?`남은 ${p.st.uRemaining}건은 다음 작업일 몫이에요.`:"수고했어요!"}</p></section>`:`<section class="card tr-card tr-hero"><div class="tr-eyebrow">시작하기</div><h3>의뢰서를 등록해 주세요</h3><p class="tr-sub">시즌 탭에서 .ai 파일이나 폴더를 끌어다 놓으면 썸네일과 컨셉이 자동으로 정리돼요.</p><button class="tr-btn primary" data-view="season">시즌으로 가기</button></section>`;
   const it=byId("items",pool[TR.skip%pool.length]);
-  return `<section class="card tr-card tr-hero"><button class="tr-hero-thumb" data-open="${esc(it.id)}">${thumbHTML(it,"lg")}</button><div class="tr-hero-body"><div class="tr-eyebrow">${extra?"🎉 오늘 몫 끝 · 여유 있으면 하나 더":"지금 이거부터"}${pool.length>1?` · ${TR.skip%pool.length+1}/${pool.length}`:""}</div><h3>${esc(it.code)}</h3><div class="tr-meta"><span class="tr-chip">${esc(conceptName(it.concept_id))}</span>${it.item_type?`<span class="tr-chip">${esc(typeName(s,it.item_type)||it.item_type)}</span>`:""}${p.carried.includes(it.id)?`<span class="tr-chip carry">이월</span>`:""}${it.important?`<span class="tr-chip">⭐</span>`:""}</div><p class="tr-reason">→ ${esc(reasonFor(it,s,p.st,p.carried))}</p><div class="tr-actions"><button class="tr-btn primary" data-focus="${esc(it.id)}">▶ 집중 시작</button>${pool.length>1?`<button class="tr-btn" data-act="skip">다른 거 ›</button>`:""}<button class="tr-btn ghost" data-tdone="${esc(it.id)}">✓ 완료</button></div></div></section>`;
+  return `<section class="card tr-card tr-hero"><button class="tr-hero-thumb" data-open="${esc(it.id)}">${thumbHTML(it,"lg")}</button><div class="tr-hero-body"><div class="tr-eyebrow">${extra?"🎉 오늘 몫 끝 · 여유 있으면 하나 더":"지금 이거부터"}${pool.length>1?` · ${TR.skip%pool.length+1}/${pool.length}`:""}</div><h3>${esc(it.code)}</h3><div class="tr-meta"><span class="tr-chip">${esc(conceptName(it.concept_id))}</span>${it.item_type?`<span class="tr-chip">${esc(typeName(s,it.item_type)||it.item_type)}</span>`:""}${p.carried.includes(it.id)?`<span class="tr-chip carry">이월</span>`:""}${it.important?`<span class="tr-chip">⭐</span>`:""}</div><p class="tr-reason">→ ${esc(reasonFor(it,s,p.st,p.carried))}</p><div class="tr-actions"><button class="tr-btn primary" data-tdone="${esc(it.id)}">✓ 완료</button>${pool.length>1?`<button class="tr-btn" data-act="skip">다른 거 ›</button>`:""}</div></div></section>`;
 }
 function itemRow(it,p,s){
-  const act=activeSession();
-  return `<div class="tr-row ${isDone(it)?"done":""}" data-item="${esc(it.id)}"><button class="bigcheck ${isDone(it)?"on":""}" data-tdone="${esc(it.id)}" data-tundo="${isDone(it)?1:""}" title="${isDone(it)?"완료 취소":"완료"}">✓</button><button class="tr-thumb-btn" data-open="${esc(it.id)}">${thumbHTML(it,"xs")}</button><div class="tr-row-main"><div class="tr-row-title">${esc(it.code)}${p.carried.includes(it.id)&&!isDone(it)?` <span class="tr-chip carry">이월</span>`:""}${act?.item_id===it.id?` <span class="tr-chip live">집중 중</span>`:""}${it.group_id&&byId("groups",it.group_id)?` <span class="tr-chip">🔗 ${esc(byId("groups",it.group_id).name)}</span>`:""}</div><div class="tr-sub">${esc(conceptName(it.concept_id))}${it.item_type?" · "+esc(typeName(s,it.item_type)||it.item_type):""}${isDone(it)?" · "+esc(recordLine(it)):""}</div></div>${isDone(it)||act?.item_id===it.id?"":`<button class="tr-btn sm" data-focus="${esc(it.id)}">▶</button>`}</div>`;
+  return `<div class="tr-row ${isDone(it)?"done":""}" data-item="${esc(it.id)}"><button class="bigcheck ${isDone(it)?"on":""}" data-tdone="${esc(it.id)}" data-tundo="${isDone(it)?1:""}" title="${isDone(it)?"완료 취소":"완료"}">✓</button><button class="tr-thumb-btn" data-open="${esc(it.id)}">${thumbHTML(it,"xs")}</button><div class="tr-row-main"><div class="tr-row-title">${esc(it.code)}${p.carried.includes(it.id)&&!isDone(it)?` <span class="tr-chip carry">이월</span>`:""}${it.group_id&&byId("groups",it.group_id)?` <span class="tr-chip">🔗 ${esc(byId("groups",it.group_id).name)}</span>`:""}</div><div class="tr-sub">${esc(conceptName(it.concept_id))}${it.item_type?" · "+esc(typeName(s,it.item_type)||it.item_type):""}${isDone(it)?" · "+esc(recordLine(it)):""}</div></div></div>`;
 }
 function viewToday(s){
   const p=todayPlan(s);saveSnapshot(s,p);
   const todoItems=(p.workday?p.todo:p.next.slice(0,5)).map(id=>byId("items",id)).filter(Boolean);
   const shown=TR.oneOnly?todoItems.slice(0,1):todoItems;
   const unconfirmed=itemsOf(s.id).filter(i=>i.auto_done!=null&&!i.confirmed).length;
-  return `${timerCard()}${goalBar(p)}${timeCard(s,p)}${heroCard(s,p)}
+  return `${goalBar(p)}${timeCard(s,p)}${heroCard(s,p)}
   ${unconfirmed?`<button class="tr-notice" data-view="season">🤖 자동 추정 확인이 필요한 의뢰서 ${unconfirmed}건 →</button>`:""}
   <section class="section"><div class="section-title"><h3>${p.workday?"오늘 할 의뢰서":"다음에 할 의뢰서"}</h3><span><button class="tr-link" data-act="one-only">${TR.oneOnly?"전체 보기":"다음 하나만"}</button></span></div><div class="tr-list">${shown.length?shown.map(it=>itemRow(it,p,s)).join(""):`<div class="empty">${p.st.target?"남은 의뢰서가 없어요.":"아직 등록된 의뢰서가 없어요."}</div>`}${TR.oneOnly&&todoItems.length>1?`<div class="tr-more">+ ${todoItems.length-1}건은 숨겨 뒀어요</div>`:""}</div></section>
   <section class="section"><div class="section-title"><h3>오늘 완료 기록</h3><span>${p.doneToday.length}건</span></div><div class="tr-list">${p.doneToday.length?[...p.doneToday].sort((a,b)=>(b.completed_at||"").localeCompare(a.completed_at||"")).map(it=>itemRow(it,p,s)).join(""):`<div class="empty">아직 완료한 의뢰서가 없어요.</div>`}</div></section>`;
@@ -861,7 +870,7 @@ function viewSeason(s){
   // 파일 기준 오늘 몫 = 오늘 아침 남은 파일 ÷ 남은 제작일
   const fileNeed=st.left?Math.ceil((st.remaining+p.doneToday.length)/st.left):st.remaining+p.doneToday.length;
   const unconfirmed=items.filter(i=>i.auto_done!=null&&!i.confirmed);
-  return `<section class="card tr-card tr-stats"><div class="tr-stat"><small>마감</small><b>${st.dday==null?"미정":st.dday>0?"D-"+st.dday:st.dday===0?"D-DAY":"D+"+(-st.dday)}</b><span>${s.deadline?md(s.deadline):"설정에서 지정"}</span></div><div class="tr-stat"><small>남은 제작일</small><b>${st.left}일</b><span>${st.end?"제작 마감 "+md(st.end):"–"}</span></div><div class="tr-stat"><small>완료 / 전체</small><b><span class="tr-ok">${st.done}</span> / ${st.target}</b><span>남음 <em class="tr-em">${st.remaining}</em></span></div>${needCell("하루 필요량",fileNeed,p.doneToday.length,st.tomorrowNeed,st,p.workday)}
+  return `<section class="card tr-card tr-stats"><div class="tr-stat"><small>마감</small><b>${st.dday==null?"미정":st.dday>0?"D-"+st.dday:st.dday===0?"D-DAY":"D+"+(-st.dday)}</b><span>${s.deadline?md(s.deadline):"설정에서 지정"}</span></div><div class="tr-stat"><small>남은 제작일</small><b>${st.left}일</b><span>${st.end?"제작 마감 "+md(st.end):"–"}</span></div><div class="tr-stat"><small>완료 / 전체</small><b><span class="tr-ok">${st.done}</span> / ${st.target}</b><span>남음 <em class="tr-em">${st.remaining}</em></span></div>${needCell("하루 필요량",fileNeed,p.doneToday.length,st.tomorrowNeed,st,p.workday)}${forecastLine(s,p)}
   ${st.bundles?`<div class="tr-ustats ${TR.collapsed.units?"closed":""}"><button class="tr-ustats-head" data-collapse="units" aria-expanded="${!TR.collapsed.units}"><span class="tr-caret" aria-hidden="true"><svg viewBox="0 0 12 12" width="16" height="16"><path d="M1.5 3.5h9L6 9z" fill="currentColor"/></svg></span><b>🔗 묶음 반영하면</b><span>묶음 ${st.bundles}개는 1건으로 · 오늘 목표는 이 기준</span>${TR.collapsed.units?`<span class="tr-ustats-sum">남은 작업 <em class="tr-em">${st.uRemaining}</em> · 오늘 ${p.doneTodayU.length}/${p.goal}건${p.workday&&p.goal&&p.doneTodayU.length>=p.goal?` <span class="tr-today-done">✓ 오늘 완료</span> 내일 ${st.uTomorrowNeed}건`:st.leftTomorrow?` · 못 하면 내일 ${st.uTomorrowNeed}건`:""}</span>`:""}</button>
   <div class="tr-ustats-row"><div class="tr-stat"><small>작업 완료 / 전체</small><b><span class="tr-ok">${st.uDone}</span> / ${st.uTarget}</b><span>남음 <em class="tr-em">${st.uRemaining}</em></span></div><div class="tr-stat"><small>아낀 작업</small><b>${st.target-st.uTarget}건</b><span>복붙으로 끝나는 파일</span></div>${needCell("하루 필요량",p.workday?p.goal:st.uNeed,p.doneTodayU.length,st.uTomorrowNeed,st,p.workday)}</div></div>`:""}</section>
   <section class="section"><div class="section-title"><h3>컨셉별 진행</h3><span>기대 진행률 ${Math.round(st.expected*100)}%</span></div><div class="tr-gauges">${st.concepts.length?st.concepts.map(x=>`<button class="card tr-gauge ${RISK[x.risk][1]}" style="${cvars(x.c.id)}" data-target="${esc(x.c.id)}" title="목표 개수 바꾸기"><div class="tr-gauge-head"><b>${esc(x.c.name)}</b><em>${RISK[x.risk][0]}</em></div><div class="tr-gauge-nums"><span class="tr-gauge-count"><b>${x.done}</b> / ${x.target}</span><span class="tr-gauge-pct">${Math.round(x.ratio*100)}<small>%</small></span></div>${x.bundles?`<div class="tr-gauge-units">묶으면 <b>${x.uDone} / ${x.uTarget}</b> · 묶음 ${x.bundles}개</div>`:""}<div class="tr-bar"><i style="width:${Math.round(x.ratio*100)}%"></i><s style="left:${Math.round(st.expected*100)}%"></s></div></button>`).join(""):`<div class="empty">파일을 등록하면 파일명에서 컨셉을 자동으로 만들어요.</div>`}</div></section>
@@ -872,10 +881,10 @@ function viewSeason(s){
 function viewLog(s){
   const items=itemsOf(s.id).filter(isDone).sort((a,b)=>(b.completed_at||"").localeCompare(a.completed_at||""));
   const byDay={};items.forEach(i=>(byDay[dayOf(i.completed_at)]??=[]).push(i));
-  const focusByDay={};TR.data.sessions.filter(x=>x.season_id===s.id&&x.ended_at).forEach(x=>{const d=dayOf(x.started_at);focusByDay[d]=(focusByDay[d]||0)+(x.focus_sec||0)});
-  const days=[...new Set([...Object.keys(byDay),...Object.keys(focusByDay)])].sort().reverse();
+  const days=Object.keys(byDay).sort().reverse();
   const p={carried:[]};
-  return days.length?days.map(d=>`<section class="section"><div class="section-title"><h3>${md(d)}${d===todayISO()?" · 오늘":""}</h3><span>완료 ${(byDay[d]||[]).length}건 · 집중 ${Math.round((focusByDay[d]||0)/60)}분</span></div><div class="tr-list">${(byDay[d]||[]).map(it=>itemRow(it,p,s)).join("")||`<div class="empty">완료 없이 집중만 했어요.</div>`}</div></section>`).join(""):`<div class="empty">아직 기록이 없어요.</div>`;
+  const avg=d=>{const m=[...dayMinutes(s,d).values()].reduce((a,x)=>a+x,0)/byDay[d].length;return m>=1?` · 건당 약 ${fmtDur(m)}`:""};
+  return days.length?days.map(d=>`<section class="section"><div class="section-title"><h3>${md(d)}${d===todayISO()?" · 오늘":""}</h3><span>완료 ${byDay[d].length}건${avg(d)}</span></div><div class="tr-list">${byDay[d].map(it=>itemRow(it,p,s)).join("")}</div></section>`).join(""):`<div class="empty">아직 기록이 없어요.</div>`;
 }
 function viewSettings(s){
   if(!s)return seasonSetup();
@@ -888,19 +897,16 @@ function viewSettings(s){
   <section class="card tr-card"><h3>근무 시간</h3><p class="tr-sub">오늘 시간표에 써요. 점심을 뺀 시간을 오늘 남은 건수로 똑같이 나눠요.</p><form class="tr-form tr-work" data-form="work">${(()=>{const c=workCfg(s);return [["start","출근",c.s],["end","퇴근",c.e],["lunchStart","점심 시작",c.ls],["lunchEnd","점심 끝",c.le]].map(([k,l,v])=>`<label class="tr-inline">${l}<input type="time" name="${k}" value="${String(Math.floor(v/60)).padStart(2,"0")}:${String(v%60).padStart(2,"0")}"></label>`).join("")})()}<button class="tr-btn primary" type="submit">저장</button></form></section>
   ${types.length?`<section class="card tr-card"><h3>품목 코드 이름</h3><form class="tr-form" data-form="types">${types.map(t=>`<label class="tr-inline">${esc(t)}<input name="${esc(t)}" value="${esc(typeName(s,t))}" placeholder="예: 반팔 티셔츠"></label>`).join("")}<button class="tr-btn primary" type="submit">저장</button></form></section>`:""}
   <section class="card tr-card"><h3>새 시즌</h3><form class="tr-form" data-form="season-new"><label>시즌<input name="name" placeholder="예: 27FW" required></label><label>마감일<input type="date" name="deadline" required></label><label>검수 여유일<input type="number" name="review_days" min="0" max="10" value="1"></label><button class="tr-btn" type="submit">만들기</button></form></section>
-  <section class="card tr-card"><h3>백업</h3><p class="tr-sub">의뢰서·세션·하루 기록을 JSON으로 내려받아요 (썸네일 제외).</p><button class="tr-btn" data-act="backup">JSON 내려받기</button></section>`;
+  <section class="card tr-card"><h3>백업</h3><p class="tr-sub">의뢰서·하루 기록을 JSON으로 내려받아요 (썸네일 제외).</p><button class="tr-btn" data-act="backup">JSON 내려받기</button></section>`;
 }
 function renderSheet(){
   const it=byId("items",TR.detail);if(!it){sheet.close();return}
-  const s=byId("seasons",it.season_id),act=activeSession();
-  const ss=TR.data.sessions.filter(x=>x.item_id===it.id).sort((a,b)=>b.started_at.localeCompare(a.started_at));
-  const total=ss.reduce((a,x)=>a+(x.ended_at?x.focus_sec||0:Math.round(elapsedMs(x)/1000)),0);
+  const s=byId("seasons",it.season_id);
   sheet.innerHTML=`<div class="tr-sheet-body"><button class="tr-sheet-close" data-act="sheet-close" aria-label="닫기">✕</button>${thumbHTML(it,"full")}<h3>${esc(it.code)}</h3><p class="tr-sub">${it.item_type?esc(typeName(s,it.item_type)||it.item_type):""}${it.file_name?" · "+esc(it.file_name):""}</p><label class="tr-inline tr-concept-pick">컨셉<select data-change="concept" data-id="${esc(it.id)}">${conceptsOf(it.season_id).map(c=>`<option value="${esc(c.id)}" ${c.id===it.concept_id?"selected":""}>${esc(c.name)}</option>`).join("")}</select></label>
   ${it.auto_done!=null&&!it.confirmed?`<div class="tr-autoline">🤖 자동 추정: <b>${it.auto_done?"완료":"미완료"}</b> <button class="tr-btn sm" data-confirm="${esc(it.id)}">맞아요</button><button class="tr-btn sm ghost" data-flip="${esc(it.id)}">아니에요</button></div>`:""}
-  <div class="tr-actions">${isDone(it)?`<button class="tr-btn" data-tdone="${esc(it.id)}" data-tundo="1">↩ 완료 취소</button>`:`<button class="tr-btn primary" data-focus="${esc(it.id)}" ${act?.item_id===it.id?"disabled":""}>${act?.item_id===it.id?"집중 중":"▶ 집중 시작"}</button><button class="tr-btn" data-tdone="${esc(it.id)}">✓ 완료</button>`}</div>
+  <div class="tr-actions">${isDone(it)?`<button class="tr-btn" data-tdone="${esc(it.id)}" data-tundo="1">↩ 완료 취소</button>`:`<button class="tr-btn primary" data-tdone="${esc(it.id)}">✓ 완료</button>`}</div>
   ${isDone(it)?`<p class="tr-sub">✓ ${md(dayOf(it.completed_at))} ${esc(recordLine(it))}</p>`:""}
   <div class="tr-opts"><button class="tr-chip-btn ${it.important?"on":""}" data-important="${esc(it.id)}">⭐ 중요</button>${isDone(it)?"":`<button class="tr-chip-btn ${it.pinned_at?"on":""}" data-pin="${esc(it.id)}">${it.pinned_at?"⭐ 우선순위 해제":"⭐ 우선순위로"}</button>`}<span class="tr-diff">${["S","M","L"].map(d=>`<button class="tr-chip-btn ${it.difficulty===d?"on":""}" data-diff="${d}" data-id="${esc(it.id)}">${DIFF_LABEL[d]}</button>`).join("")}</span></div>
-  <div class="tr-sessions"><b>집중 기록</b> <span class="tr-sub">누적 ${Math.round(total/60)}분 · ${ss.length}회</span>${ss.slice(0,8).map(x=>`<div class="tr-sub">${md(dayOf(x.started_at))} ${hm(x.started_at)} ~ ${x.ended_at?hm(x.ended_at)+" · "+Math.round((x.focus_sec||0)/60)+"분":"진행 중"}</div>`).join("")}</div>
   <div class="tr-actions tr-sheet-foot"><button class="tr-btn sm" data-act="thumb-pick">썸네일 교체</button><span class="tr-sub">최종본을 카드에 끌어다 놓거나 ⌘V로 붙여넣어도 돼요</span><button class="tr-btn sm ghost danger" data-del-item="${esc(it.id)}">삭제</button></div></div>`;
 }
 function openSheet(id){TR.detail=id;renderSheet();if(!sheet.open)sheet.showModal()}
@@ -920,8 +926,7 @@ async function onClick(e){
   // 설정: 컨셉 순서 (컨셉 탭·컨셉 카드·폴더 목록 순서)
   if(d.cmove){const s=season();if(!s)return;const list=conceptsOf(s.id),i=list.findIndex(c=>c.id===d.cmove),j=i+Number(d.dir);if(i<0||j<0||j>=list.length)return;[list[i],list[j]]=[list[j],list[i]];await put({concepts:list.map((c,n)=>({...c,sort:n+1}))});return}
   if(d.gundo){const g=byId("groups",d.gundo);if(!g)return;await remove("groups",g.id);toast(`${g.name} 묶음을 풀었어요. 의뢰서는 그대로예요.`);return}
-  if(d.open&&!e.target.closest("[data-tdone],[data-focus]")){openSheet(d.open);return}
-  if(d.focus){if(sheet.open)sheet.close();await startFocus(d.focus);return}
+  if(d.open&&!e.target.closest("[data-tdone]")){openSheet(d.open);return}
   if(d.tdone){e.stopPropagation();await setDone(d.tdone,!d.tundo);return}
   if(d.target){
     const c=byId("concepts",d.target);if(!c)return;
@@ -934,12 +939,10 @@ async function onClick(e){
   // 우선순위로 / 해제 (묶음이면 묶음 전체를 같이)
   if(d.pin){const it=byId("items",d.pin),v=it.pinned_at?null:nowISO(),mates=it.group_id?TR.data.items.filter(i=>i.group_id===it.group_id&&!isDone(i)):[it];TR.skip=0;await put({items:mates.map(i=>({...i,pinned_at:v}))});toast(v?"⭐ 우선순위 칸으로 올렸어요. 오늘 목록 맨 앞에 들어가요.":"우선순위에서 내렸어요.");return}
   if(d.diff){const it=byId("items",d.id);await put({items:[{...it,difficulty:d.diff}]});return}
-  if(d.delItem){const it=byId("items",d.delItem);if(!confirm(`${it.code}을(를) 지울까요? 집중 기록과 썸네일도 함께 지워져요.`))return;sheet.close();await remove("items",it.id);return}
+  if(d.delItem){const it=byId("items",d.delItem);if(!confirm(`${it.code}을(를) 지울까요? 썸네일도 함께 지워져요.`))return;sheet.close();await remove("items",it.id);return}
   if(d.delConcept){const c=byId("concepts",d.delConcept),n=TR.data.items.filter(i=>i.concept_id===c.id).length;if(!confirm(`${c.name} 컨셉을 지울까요?${n?` 의뢰서 ${n}건도 함께 지워져요.`:""}`))return;if(TR.conceptTab===c.id)TR.conceptTab="all";await remove("concepts",c.id);return}
   switch(d.act){
     case"close":closeTracker();break;
-    case"pause":await pauseFocus();break;
-    case"stop":await stopFocus();break;
     case"skip":TR.skip++;render();break;
     case"one-only":TR.oneOnly=!TR.oneOnly;saveUI();render();break;
     case"pick":root.querySelector("#tr-file").click();break;
