@@ -115,6 +115,15 @@ body.tr-on{overflow:hidden}
 .tr-timecard.ot{border-color:#c9c3e6;background:#fbfaff}
 .tr-ot{display:flex;align-items:center;flex-wrap:wrap;gap:6px;margin-top:10px;font-size:14px;font-weight:700;color:#4b4596}
 .tr-ot span{margin-right:4px}
+/* 타이머 (원할 때만) */
+.tr-stopwatch{display:grid;grid-template-columns:auto 1fr auto;gap:12px 14px;align-items:center;border-color:var(--tr);background:var(--tr-bg)}
+.tr-stopwatch .tr-actions{grid-column:1/-1;margin-top:0}
+.tr-sw-code{font-size:var(--fs-title);font-weight:800}
+.tr-sw-clock{display:grid;justify-items:end;gap:2px}
+.tr-sw-clock b{font:700 32px/1 ui-monospace,SFMono-Regular,Menlo,monospace;color:var(--tr);font-variant-numeric:tabular-nums}
+.tr-sw-clock small{font-size:14px;font-weight:700;color:var(--ok);font-variant-numeric:tabular-nums}
+.tr-sw-clock small.over{color:var(--danger)}
+.tr-chip.live{background:var(--tr-bg);color:var(--tr);font-weight:700}
 /* 완료 예상일 */
 .tr-forecast{grid-column:1/-1;margin:10px 4px 0;padding:9px 12px;border-radius:var(--r-md);background:#f3f7f1;font-size:15px;font-weight:600;color:var(--ink-2);text-align:left}
 .tr-forecast b{font-weight:800;color:var(--ink)}
