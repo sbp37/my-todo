@@ -12,10 +12,10 @@ const TR={
   data:{seasons:[],concepts:[],groups:[],items:[],sessions:[],days:[]},
   thumbs:{},loaded:false,offline:false,pending:0,
   open:false,view:"today",seasonId:"",conceptTab:"all",skip:0,oneOnly:false,detail:null,progress:"",
-  zoom:2,collapsed:{},selecting:false,selected:new Set()
+  zoom:2,tzoom:4,collapsed:{},selecting:false,selected:new Set()
 };
 try{Object.assign(TR,JSON.parse(localStorage.getItem(UI_KEY)||"{}"))}catch(e){}
-const saveUI=()=>{try{localStorage.setItem(UI_KEY,JSON.stringify({view:TR.view,seasonId:TR.seasonId,conceptTab:TR.conceptTab,oneOnly:TR.oneOnly,zoom:TR.zoom,collapsed:TR.collapsed}))}catch(e){}};
+const saveUI=()=>{try{localStorage.setItem(UI_KEY,JSON.stringify({view:TR.view,seasonId:TR.seasonId,conceptTab:TR.conceptTab,oneOnly:TR.oneOnly,zoom:TR.zoom,tzoom:TR.tzoom,collapsed:TR.collapsed}))}catch(e){}};
 
 /* ---------- 날짜 ---------- */
 const D={
@@ -302,17 +302,25 @@ function saveSnapshot(s,p){
 async function setDone(itemId,done){
   const it=byId("items",itemId);if(!it)return;
   if(done)TR.skip=0;
-  // 이 의뢰서 타이머가 켜져 있으면 같이 멈추고, 이 건에 쓸 시간(시간표)과 비교
+  // 이 의뢰서 타이머가 켜져 있으면 같이 멈추고 목표 시간과 비교
   const act=done&&activeSession()?.item_id===itemId?activeSession():null,rows={items:[{...it,status:done?"done":"todo",completed_at:done?nowISO():null,confirmed:true,pinned_at:done?null:it.pinned_at}]};
-  let goal=0,sec=0;
-  if(act){const s=byId("seasons",it.season_id),p=s&&todayPlan(s);if(p?.workday&&p.goal){const t=timePlan(s,p);if(t.R&&t.phase!=="after")goal=t.slotLen}
-    const end={...act,ended_at:nowISO()};sec=timerSec(end);if(sec<10)await remove("sessions",act.id);else rows.sessions=[{...end,focus_sec:sec}]}
+  let sec=0;
+  if(act){const end={...act,ended_at:nowISO()};sec=timerSec(end);if(sec<10)await remove("sessions",act.id);else rows.sessions=[{...end,focus_sec:sec}]}
   await put(rows);
   if(!done)return;
-  if(act&&sec>=10){const m=Math.max(1,Math.round(sec/60)),d=Math.round(goal-sec/60);toast(`✓ ${it.code} 완료 · ⏱ ${fmtDur(m)} 걸렸어요${goal?d>0?` · 목표보다 ${fmtDur(d)} 빨리 🎉`:d<0?` · 목표보다 ${fmtDur(-d)} 더`:" · 목표 딱 맞춤":""}`,4000);return}
+  if(act&&sec>=10){toast(`✓ ${it.code} 완료 · ${timerResult(sec,timerGoal(act))}`,4500);return}
   const n=itemMinutes(byId("items",itemId));toast(`✓ ${it.code} 완료${n?` · ${fmtDur(n)} 걸렸어요`:""}`);
 }
-/* ---------- 타이머 (원할 때만) ---------- */
+/* ---------- 타이머: 몇 분 안에 할지 정하고 시작 → 시간 되면 알림, 그 뒤로는 초과 시간 ---------- */
+// 목표 분은 시즌 settings.timer_goals[세션 id], 마지막으로 고른 분은 settings.timer_last (맥·폰 같이)
+const TIMER_CHOICES=[15,20,30,45,60];
+const timerGoal=x=>Number(byId("seasons",x?.season_id)?.settings?.timer_goals?.[x?.id])||0;
+const timerResult=(sec,goal)=>{const m=Math.max(1,Math.round(sec/60)),d=goal-m;return `⏱ ${fmtDur(m)} 걸렸어요${goal?` · 목표 ${fmtDur(goal)}${d>0?`보다 ${fmtDur(d)} 빨리 🎉`:d<0?`보다 ${fmtDur(-d)} 더`:" 딱 맞춤 👍"}`:""}`};
+// 보통 몇 분: 최근 타이머 목표 10개 평균 → 없으면 마지막으로 고른 시간 → 30분
+function typicalMin(s){
+  const g=s.settings?.timer_goals||{},ss=TR.data.sessions.filter(x=>x.season_id===s.id&&g[x.id]).sort((a,b)=>b.started_at.localeCompare(a.started_at)).slice(0,10);
+  return ss.length?Math.round(ss.reduce((a,x)=>a+Number(g[x.id]),0)/ss.length):Number(s.settings?.timer_last)||30;
+}
 // 경과 초: 시작~끝(지금) 실제 시간에서 그날 점심·쉼과 겹친 만큼 뺀다
 function timerSec(x){
   const end=x.ended_at?Date.parse(x.ended_at):Date.now(),st=Date.parse(x.started_at),s=byId("seasons",x.season_id),day=dayOf(x.started_at);
@@ -320,15 +328,67 @@ function timerSec(x){
   if(s&&dayOf(end)===day){const c=workCfg(s,day),a=seoulMin(st),b=seoulMin(end);sec-=c.breaks.reduce((t,[b0,b1])=>t+Math.max(0,Math.min(b,b1)-Math.max(a,b0)),0)*60}
   return Math.max(0,Math.round(sec));
 }
-async function startTimer(itemId){
-  const it=byId("items",itemId);if(!it||isDone(it))return;
-  const act=activeSession();if(act?.item_id===itemId)return;
-  if(act)await remove("sessions",act.id);
-  TR.view="today";saveUI();if(sheet.open)sheet.close();
-  await put({sessions:[{id:crypto.randomUUID(),item_id:itemId,season_id:it.season_id,started_at:nowISO(),ended_at:null,paused_ms:0,pause_started_at:null,focus_sec:0}]});
-  toast(`⏱ ${it.code} 시작! 끝나면 ✓ 완료를 눌러요`);
+function openTimerPick(itemId){
+  const it=byId("items",itemId),s=it&&byId("seasons",it.season_id);if(!it||!s||isDone(it))return;
+  const last=Number(s.settings?.timer_last)||30;
+  pick.innerHTML=`<form class="tr-pick-body" data-form="timer" data-id="${esc(it.id)}">${thumbHTML(it,"full")}<div class="tr-eyebrow">⏱ 타이머 · ${esc(it.code)}</div><h3>몇 분 안에 할까요?</h3><p class="tr-sub">지난번에 고른 시간이 골라져 있어요. 시간이 되면 알림이 떠요.</p><div class="tr-pick-chips">${TIMER_CHOICES.map(m=>`<button type="button" class="tr-chip-btn ${m===last?"on":""}" data-pickmin="${m}">${fmtDur(m)}</button>`).join("")}</div><label class="tr-inline tr-pick-min">직접<input type="number" name="min" min="1" max="600" value="${last}" required inputmode="numeric">분</label><div class="tr-actions"><button class="tr-btn primary" type="submit">▶ 시작</button><button class="tr-btn ghost" type="button" data-act="pick-close">취소</button></div></form>`;
+  if(!pick.open)pick.showModal();
 }
-async function stopTimer(){const x=activeSession();if(x){await remove("sessions",x.id);toast("타이머를 껐어요.")}}
+async function startTimer(itemId,min){
+  const it=byId("items",itemId);if(!it||isDone(it)||!byId("seasons",it.season_id))return;
+  primeAlert(true);
+  if(activeSession())await stopTimer(true);
+  TR.view="today";saveUI();if(sheet.open)sheet.close();if(pick.open)pick.close();
+  const s=byId("seasons",it.season_id),id=crypto.randomUUID(),keep=new Set(TR.data.sessions.map(x=>x.id)),goals={};
+  // 지워진 세션의 목표는 정리
+  for(const [k,v] of Object.entries(s.settings?.timer_goals||{}))if(keep.has(k))goals[k]=v;
+  goals[id]=min;
+  await put({sessions:[{id,item_id:itemId,season_id:it.season_id,started_at:nowISO(),ended_at:null,paused_ms:0,pause_started_at:null,focus_sec:0}],seasons:[{...s,settings:{...(s.settings||{}),timer_last:min,timer_goals:goals}}]});
+  toast(`⏱ ${it.code} · ${fmtDur(min)} 시작!`);
+}
+// 멈춤: 완료는 안 하고 타이머만 (10초 안 됐으면 기록 없이)
+async function stopTimer(silent){
+  const x=activeSession();if(!x)return;
+  const end={...x,ended_at:nowISO()},sec=timerSec(end);
+  if(sec<10)await remove("sessions",x.id);else await put({sessions:[{...end,focus_sec:sec}]});
+  restoreTitle();
+  if(!silent)toast(sec<10?"타이머를 껐어요.":`■ 타이머 멈춤 · ${fmtDur(Math.max(1,Math.round(sec/60)))} 했어요`);
+}
+async function extendTimer(){
+  const x=activeSession(),s=x&&byId("seasons",x.season_id);if(!s)return;
+  const g=(timerGoal(x)||typicalMin(s))+5;swUnder=false;swAlerted=false;
+  await put({seasons:[{...s,settings:{...(s.settings||{}),timer_goals:{...(s.settings?.timer_goals||{}),[x.id]:g}}}]});
+  toast(`+5분 · 목표 ${fmtDur(g)}`);
+}
+// 알림: 소리(시작 버튼을 누를 때 준비) + 브라우저 알림(허용했으면) + 탭 제목
+let audioCtx=null,swId=null,swUnder=false,swAlerted=false;
+const baseTitle=document.title;
+function restoreTitle(){if(document.title!==baseTitle)document.title=baseTitle}
+function primeAlert(askNotify){
+  try{audioCtx??=new (window.AudioContext||window.webkitAudioContext)();audioCtx.resume?.()}catch(e){}
+  try{if(askNotify&&window.Notification&&Notification.permission==="default")Notification.requestPermission()}catch(e){}
+}
+function beep(){try{const c=audioCtx;if(!c)return;[0,.35,.7].forEach(t=>{const o=c.createOscillator(),g=c.createGain();o.frequency.value=880;o.connect(g);g.connect(c.destination);g.gain.setValueAtTime(.0001,c.currentTime+t);g.gain.exponentialRampToValueAtTime(.3,c.currentTime+t+.02);g.gain.exponentialRampToValueAtTime(.0001,c.currentTime+t+.25);o.start(c.currentTime+t);o.stop(c.currentTime+t+.3)})}catch(e){}}
+function timeUp(it,goal){
+  beep();
+  try{if(window.Notification&&Notification.permission==="granted")new Notification("⏰ 시간 끝!",{body:`${it?.code||""} · 목표 ${fmtDur(goal)}가 지났어요`,tag:"tr-timer"})}catch(e){}
+  toast(`⏰ ${it?.code||""} 목표 ${fmtDur(goal)} 끝! 지금부터 초과 시간을 재요`,6000);
+}
+// 1초마다 (트래커를 닫아 둬도): 남은 시간·초과·탭 제목, 목표를 넘는 순간 한 번 알림
+function updateTimers(){
+  const x=activeSession();if(!x){restoreTitle();return}
+  const it=byId("items",x.item_id),goal=timerGoal(x)*60,sec=timerSec(x),r=goal-sec;
+  if(swId!==x.id){swId=x.id;swUnder=false;swAlerted=false}
+  if(goal){if(r>0)swUnder=true;else if(swUnder&&!swAlerted){swAlerted=true;timeUp(it,goal/60)}}
+  const over=goal&&r<0;
+  document.title=goal?(over?`⏰ +${mmss(-r)} 초과 · ${it?.code||""}`:`⏱ ${mmss(r)} · ${it?.code||""}`):`⏱ ${mmss(sec)} · ${it?.code||""}`;
+  const card=root?.querySelector(".tr-stopwatch");if(!card)return;
+  card.classList.toggle("over",!!over);
+  card.querySelector("[data-tick]").textContent=goal?(over?"+"+mmss(-r):mmss(r)):mmss(sec);
+  card.querySelector("[data-tick-sub]").textContent=goal?(over?"초과":`남음 · ${mmss(sec)} 지남`):"지남";
+  const bar=card.querySelector(".tr-sw-bar i");if(bar)bar.style.width=`${Math.min(100,sec/goal*100)}%`;
+}
+setInterval(()=>{if(TR.loaded)updateTimers()},1000);
 const timerMinutes=it=>{const ss=TR.data.sessions.filter(x=>x.item_id===it.id&&x.ended_at);return ss.length?Math.max(1,Math.round(ss.reduce((a,x)=>a+(x.focus_sec||0),0)/60)):null};
 // 걸린 시간 = 그날 바로 앞에 끝낸 것(없으면 출근)부터 이걸 끝낸 시각까지의 근무 분 (점심·쉼 제외). 묶음 복붙처럼 이어서 끝내면 0에 가깝다
 function dayMinutes(s,day){
@@ -337,8 +397,12 @@ function dayMinutes(s,day){
   return out;
 }
 function itemMinutes(it){const s=it&&byId("seasons",it.season_id);return s&&it.completed_at?Math.round(dayMinutes(s,dayOf(it.completed_at)).get(it.id)||0):0}
-// 완료 기록: 14:17 완료 · 12분 (타이머로 쟀으면 ⏱ 23분)
-function recordLine(it){if(!it?.completed_at)return"";const tm=timerMinutes(it),n=tm??itemMinutes(it);return `${hm(it.completed_at)} 완료${n?` · ${tm!=null?"⏱ ":""}${fmtDur(n)}`:""}`}
+// 완료 기록: 14:17 완료 · 12분 (타이머로 쟀으면 ⏱ 34분 (목표 30분))
+function recordLine(it){
+  if(!it?.completed_at)return"";const tm=timerMinutes(it);
+  if(tm!=null){const g=timerGoal(TR.data.sessions.filter(x=>x.item_id===it.id&&x.ended_at).sort((a,b)=>b.started_at.localeCompare(a.started_at))[0]);return `${hm(it.completed_at)} 완료 · ⏱ ${fmtDur(tm)}${g?` (목표 ${fmtDur(g)})`:""}`}
+  const n=itemMinutes(it);return `${hm(it.completed_at)} 완료${n?` · ${fmtDur(n)}`:""}`;
+}
 
 /* ---------- 파일 → 썸네일 + 자동 분류 ---------- */
 let pdfjsP=null;
@@ -653,7 +717,7 @@ async function arrangeSimilar(){
 }
 
 /* ---------- 화면 ---------- */
-let root,main,sheet,toastTimer,tick;
+let root,main,sheet,pick,toastTimer,tick;
 function toast(msg,ms=2600){const t=root?.querySelector(".tr-toast");if(!t)return;t.textContent=msg;t.classList.add("on");clearTimeout(toastTimer);toastTimer=setTimeout(()=>t.classList.remove("on"),ms)}
 const thumbHTML=(it,cls="")=>TR.thumbs[it.id]?`<img class="tr-thumb ${cls}" src="${esc(TR.thumbs[it.id])}" alt="${esc(it.code)}" loading="lazy">`:`<div class="tr-thumb tr-thumb-empty ${cls}"><span>${esc(it.item_type||"")}</span></div>`;
 const conceptName=id=>byId("concepts",id)?.name||"";
@@ -677,9 +741,9 @@ const RISK={none:["–",""],done:["완료","done"],ok:["정상","ok"],warn:["주
 
 function build(){
   root=document.createElement("div");root.id="tracker";root.className="tr";root.hidden=true;
-  root.innerHTML=`<div class="tr-wrap"><header class="tr-top"><div class="tr-head"><button class="tr-back" data-act="close" aria-label="비서로 돌아가기">‹ 비서</button><h2>🎯 마감 트래커</h2><span class="tr-state" id="tr-state"></span></div><nav class="tr-tabs">${[["today","오늘"],["season","시즌"],["log","기록"],["settings","설정"]].map(([k,l])=>`<button data-view="${k}">${l}</button>`).join("")}</nav></header><main id="tr-main"></main></div><div class="tr-dropzone" aria-hidden="true"><div>여기에 놓으면 등록돼요<small>.ai · .pdf · 폴더</small></div></div><dialog id="tr-sheet" class="tr-sheet"></dialog><input type="file" id="tr-file" multiple accept=".ai,.pdf,image/*" hidden><input type="file" id="tr-folder" webkitdirectory multiple hidden><input type="file" id="tr-thumb-file" accept=".ai,.pdf,image/*" hidden><div class="tr-toast" role="status"></div>`;
+  root.innerHTML=`<div class="tr-wrap"><header class="tr-top"><div class="tr-head"><button class="tr-back" data-act="close" aria-label="비서로 돌아가기">‹ 비서</button><h2>🎯 마감 트래커</h2><span class="tr-state" id="tr-state"></span></div><nav class="tr-tabs">${[["today","오늘"],["season","시즌"],["log","기록"],["settings","설정"]].map(([k,l])=>`<button data-view="${k}">${l}</button>`).join("")}</nav></header><main id="tr-main"></main></div><div class="tr-dropzone" aria-hidden="true"><div>여기에 놓으면 등록돼요<small>.ai · .pdf · 폴더</small></div></div><dialog id="tr-sheet" class="tr-sheet"></dialog><dialog id="tr-pick" class="tr-sheet tr-pick"></dialog><input type="file" id="tr-file" multiple accept=".ai,.pdf,image/*" hidden><input type="file" id="tr-folder" webkitdirectory multiple hidden><input type="file" id="tr-thumb-file" accept=".ai,.pdf,image/*" hidden><div class="tr-toast" role="status"></div>`;
   document.body.appendChild(root);
-  main=root.querySelector("#tr-main");sheet=root.querySelector("#tr-sheet");
+  main=root.querySelector("#tr-main");sheet=root.querySelector("#tr-sheet");pick=root.querySelector("#tr-pick");
   root.addEventListener("click",onClick);
   root.addEventListener("change",onChange);
   root.querySelector("#tr-file").onchange=e=>{importFiles([...e.target.files]);e.target.value=""};
@@ -688,6 +752,7 @@ function build(){
   root.querySelector("#tr-thumb-file").onchange=e=>{const f=e.target.files[0];if(f&&TR.detail)replaceThumb(TR.detail,f);e.target.value=""};
   sheet.addEventListener("close",()=>{TR.detail=null});
   sheet.addEventListener("click",e=>{if(e.target===sheet)sheet.close()});
+  pick.addEventListener("click",e=>{if(e.target===pick)pick.close()});
   // 드래그: 전체 화면에 놓으면 일괄 등록, 카드 위에 놓으면 그 카드 썸네일 교체
   let depth=0;
   root.addEventListener("dragenter",e=>{if(![...(e.dataTransfer?.types||[])].includes("Files"))return;depth++;root.classList.add("dragging")});
@@ -716,14 +781,8 @@ function openTracker(){
   render();
   if(!getApiKey()){return}
   refresh();
-  // 1초마다 타이머 숫자, 30초마다 오늘 화면을 다시 그려서 시간표(남은 분·지금 위치)가 흐르게
-  let sec=0;clearInterval(tick);tick=setInterval(()=>{if(!TR.open)return;updateTimers();if(++sec%30===0&&TR.view==="today"&&!sheet.open&&!TR.dragging&&!TR.selecting)render()},1000);
-}
-function updateTimers(){
-  const x=activeSession(),el=root?.querySelector("[data-tick]");if(!x||!el)return;
-  const sec=timerSec(x),goal=Number(el.closest("[data-goal]")?.dataset.goal)||0,left=root.querySelector("[data-tick-left]");
-  el.textContent=mmss(sec);
-  if(left&&goal){const r=goal-sec;left.textContent=r>=0?`목표까지 ${mmss(r)}`:`+${mmss(-r)} 초과`;left.classList.toggle("over",r<0)}
+  // 30초마다 오늘 화면을 다시 그려서 시간표(여유·지금 위치)가 흐르게
+  clearInterval(tick);tick=setInterval(()=>{if(TR.open&&TR.view==="today"&&!sheet.open&&!pick.open&&!TR.dragging&&!TR.selecting)render()},30000);
 }
 function closeTracker(){TR.open=false;if(root)root.hidden=true;document.body.classList.remove("tr-on");clearInterval(tick);if(location.hash==="#tracker")history.replaceState(null,"",location.pathname+location.search)}
 
@@ -756,44 +815,39 @@ function goalBar(p){
   const tomorrow=!st.leftTomorrow?`<span class="tr-goal-tomorrow">⚠️ 오늘이 마지막 제작일이에요</span>`:met?`<span class="tr-goal-tomorrow ok">오늘 목표 채웠어요 → 내일 목표 <b>${p.tomorrowIfStop}</b>건</span>`:`<span class="tr-goal-tomorrow">오늘 더 못 하면 → 내일 목표 <b class="tr-em">${p.tomorrowIfStop}</b>건 · 오늘 목표 채우면 → <b>${p.tomorrowIfGoal}</b>건</span>`;
   return `<section class="card tr-card tr-goal"><div class="tr-goal-head"><div><div class="tr-eyebrow">오늘 목표</div><h3><b>${done}</b> / ${p.goal}건${p.goalFiles!==p.goal?` <small class="tr-goal-files">파일 ${files} / ${p.goalFiles}개</small>`:""}</h3></div></div><div class="tr-bar"><i style="width:${pct}%"></i></div><p class="tr-goal-info">${st.overdue?"⚠️ 제작 마감이 지났어요. 남은 걸 오늘 몫으로 잡았어요.":`제작 마감 ${md(st.end)}까지 <b>${st.left}</b>일 · ${left}`}${met?" · 🎉 오늘 목표 달성!":""}${tomorrow}${p.carry?`<span class="tr-goal-note">지난 작업일에 밀린 ${p.carry}건은 한꺼번에 얹지 않고 남은 날에 나눠 담았어요</span>`:""}${st.bundles?`<span class="tr-goal-note">묶음은 1건으로 세요 · 묶음 안 의뢰서가 다 끝나야 완료</span>`:""}</p></section>`;
 }
-// 오늘 시간표: 지금 하는 건에 남은 시간(크게) + 출근~퇴근(야근) 타임라인 (끝낸 칸 · 지금 칸 · 남은 칸 · 점심·쉼)
+// 오늘 여유: 퇴근(야근 끝)까지 남은 근무 시간 − 남은 건수 × 보통 몇 분 (타이머에서 고른 시간 평균) + 타임라인
 function timeCard(s,p){
   if(!p.workday||!p.goal)return"";
   const t=timePlan(s,p),c=t.c,span=c.e-c.s,pos=m=>Math.max(0,Math.min(100,(m-c.s)/span*100));
-  const m=v=>fmtDur(v),over=t.R&&t.slotLeft<0;
   const otBtns=(label)=>`<div class="tr-ot"><span>${label}</span>${[60,120,180].map(x=>`<button class="tr-btn sm" data-ot="${x}">${x/60}시간</button>`).join("")}<button class="tr-btn sm ghost" data-ot="pick">직접</button></div>`;
-  let big,sub,extraUI="";
-  if(t.phase==="before"){big=`${clock(c.s)} 시작`;sub=`오늘 ${t.R}건 · 건당 약 <b>${m(t.base)}</b>`}
-  else if(!t.R){
+  const typ=typicalMin(s),R=t.R,from=Math.max(t.now,c.s),avail=workBetween(from,c.e,c),need=R*typ,slack=avail-need;
+  const hasGoals=Object.keys(s.settings?.timer_goals||{}).length>0;
+  let big,sub;
+  if(!R){
     big=t.overtime?"🌙 보너스 타임":"오늘 몫 끝! 🎉";
-    sub=`${t.overtime?`야근 끝(${clock(c.e)})까지`:"퇴근까지"} <b>${m(t.nowRem)}</b>${t.extra?` · 목표보다 <b class="tr-ok">+${t.extra}건</b>`:""} · 하나 더 할 때마다 내일 목표가 줄어요 (지금 내일 <b>${p.tomorrowIfStop}</b>건)`;
-  }
-  else{
-    big=over?`<span class="tr-over">+${m(-t.slotLeft)} 초과</span>`:`남은 <b data-budget>${m(t.slotLeft)}</b>`;
-    const diff=Math.round(t.slotLen-t.base);
-    sub=`이 건에 쓸 시간 <b>${m(t.slotLen)}</b>${!t.overtime&&Math.abs(diff)>=1?` <span class="${diff>0?"tr-ok":"tr-em"}">(아침보다 ${diff>0?"+":""}${diff}분)</span>`:""}${t.nextEach?` · 지금 끝내면 남은 ${t.R-1}건에 <b>${m(t.nextEach)}</b>씩`:" · 이게 오늘 마지막이에요"}`;
+    sub=`${t.overtime?`야근 끝(${clock(c.e)})까지`:"퇴근까지"} <b>${fmtDur(t.nowRem)}</b>${t.extra?` · 목표보다 <b class="tr-ok">+${t.extra}건</b>`:""} · 하나 더 할 때마다 내일 목표가 줄어요 (지금 내일 <b>${p.tomorrowIfStop}</b>건)`;
+  }else{
+    big=slack>=0?`여유 <b class="tr-slack">${fmtDur(slack)}</b>`:`<span class="tr-over">${fmtDur(-slack)} 부족</span>`;
+    sub=`${t.phase==="before"?`${clock(c.s)} 출근부터`:t.overtime||t.phase==="gap"?`야근 끝(${clock(c.e)})까지`:"퇴근까지"} <b>${fmtDur(avail)}</b> · 남은 ${R}건 × 보통 ${fmtDur(typ)} = <b>${fmtDur(need)}</b>${slack<0?` · 오늘 다 하려면 건당 <b class="tr-em">${fmtDur(avail/R)}</b> 안에`:""}`;
     if(t.phase==="lunch")sub=`🍚 점심시간 · ${clock(c.le)}부터 다시 · `+sub;
     if(t.phase==="gap")sub=`☕ 쉬는 중 · ${clock(c.ot.s)}부터 야근 · `+sub;
   }
-  // 타임라인 (야근이면 끝까지 늘어나고 야근 구간은 남색 바탕)
+  // 타임라인: 끝낸 것(초록) → 지금부터 남은 일(보통 N분씩) → 여유(연두) · 점심·쉼 · 야근
   const seg=(a,b2,cls,title="")=>clockSegs(a,b2,c).map(([x,y])=>`<i class="tr-tl-seg ${cls}" style="left:${pos(x)}%;width:${Math.max(.4,pos(y)-pos(x))}%" title="${esc(title)}"></i>`).join("");
   let bars=c.breaks.map(([x,y])=>`<i class="tr-tl-lunch ${x===c.ls?"":"gap"}" style="left:${pos(x)}%;width:${pos(y)-pos(x)}%"></i>`).join("");
   if(c.ot)bars=`<i class="tr-tl-ot" style="left:${pos(c.ot.s)}%;width:${pos(c.ot.e)-pos(c.ot.s)}%"></i>`+bars;
   t.ends.forEach((e,i)=>{const st=i?t.ends[i-1]:c.s,u=t.doneU[i];bars+=seg(st,e,i>=p.goal?"done bonus":"done",`${clock(e)} 완료 · ${u.group?u.group.name:u.items[0].code}`)});
-  if(t.R&&t.phase!=="after"){
-    const curEnd=Math.min(c.e,t.slotEnd);
-    bars+=seg(t.slotStart,curEnd,"cur","지금 하는 건");
-    if(over&&t.now>curEnd)bars+=seg(curEnd,Math.min(t.now,c.e),"overrun","초과");
-    const fs=Math.max(curEnd,over?t.now:curEnd),each=t.R>1?workBetween(fs,c.e,c)/(t.R-1):0;
-    for(let k=0;k<t.R-1;k++)bars+=seg(addWork(fs,each*k,c),Math.min(c.e,addWork(fs,each*(k+1),c)),"next");
+  if(R&&t.phase!=="after"){
+    for(let k=0;k<R;k++){const a=addWork(from,typ*k,c);if(a>=c.e)break;bars+=seg(a,Math.min(c.e,addWork(from,typ*(k+1),c)),"next",`남은 일 ${k+1} · 보통 ${fmtDur(typ)}`)}
+    if(slack>0)bars+=seg(addWork(from,need,c),c.e,"slack",`여유 ${fmtDur(slack)}`);
   }
   const ticks=[],step=span>720?2:1;for(let h=Math.ceil(c.s/60);h*60<=c.e;h+=step)ticks.push(`<span style="left:${pos(h*60)}%">${h}</span>`);
   const nowMark=t.now>=c.s&&t.now<=c.e?`<b class="tr-tl-now" style="left:${pos(t.now)}%"><em>${clock(Math.floor(t.now))}</em></b>`:"";
-  const tl=`<div class="tr-tl"><div class="tr-tl-track">${bars}${nowMark}</div><div class="tr-tl-ticks">${ticks.join("")}</div></div><div class="tr-tl-legend"><span><i class="done"></i>끝낸 것</span><span><i class="cur"></i>지금</span><span><i class="next"></i>남은 칸</span><span><i class="lunch"></i>점심·쉼</span>${c.ot?`<span><i class="ot"></i>야근</span>`:""}</div>`;
+  const tl=`<div class="tr-tl"><div class="tr-tl-track">${bars}${nowMark}</div><div class="tr-tl-ticks">${ticks.join("")}</div></div><div class="tr-tl-legend"><span><i class="done"></i>끝낸 것</span><span><i class="next"></i>남은 일 (보통 ${fmtDur(typ)})</span><span><i class="slack"></i>여유</span><span><i class="lunch"></i>점심·쉼</span>${c.ot?`<span><i class="ot"></i>야근</span>`:""}</div>`;
   if(t.phase==="after")return dayEndCard(s,p,t,tl,otBtns(t.R?"🌙 더 할래요":"🌙 조금 더 할래요"));
   const otInfo=c.ot?` · 🌙 야근 ${clock(c.ot.s)}–${clock(c.ot.e)}`:"";
   const otCtl=t.overtime||t.phase==="gap"?`<div class="tr-ot"><span>🌙 야근 중 · ${clock(c.ot.e)}까지</span><button class="tr-btn sm" data-ot="ext">+1시간</button><button class="tr-btn sm ghost" data-ot="end">야근 끝</button></div>`:"";
-  return `<section class="card tr-card tr-timecard ${over&&t.phase==="work"?"over":""} ${t.overtime?"ot":""}"><div class="tr-time-head"><div><div class="tr-eyebrow">${t.overtime?"🌙 야근 중 · ":"⏱ "}지금 하는 건</div><div class="tr-time-big">${big}</div></div><span class="tr-time-hours">${clock(c.s)}–${clock(c.end0)} · 점심 ${clock(c.ls)}–${clock(c.le)}${otInfo}</span></div><p class="tr-time-sub">${sub}</p>${extraUI}${otCtl}${tl}</section>`;
+  return `<section class="card tr-card tr-timecard ${R&&slack<0?"over":""} ${t.overtime?"ot":""}"><div class="tr-time-head"><div><div class="tr-eyebrow">${t.overtime?"🌙 야근 중 · ":""}⏳ 오늘 여유</div><div class="tr-time-big">${big}</div></div><span class="tr-time-hours">${clock(c.s)}–${clock(c.end0)} · 점심 ${clock(c.ls)}–${clock(c.le)}${otInfo}</span></div><p class="tr-time-sub">${sub}</p>${R&&!hasGoals?`<p class="tr-time-note">보통 ${fmtDur(typ)}은 기본값이에요 · ⏱ 타이머에서 고른 시간의 평균으로 바뀌어요</p>`:""}${otCtl}${tl}</section>`;
 }
 // 퇴근(야근 끝) 뒤: 오늘 N건 완료 · 건당 M분 · 내일 목표 K건 + 오늘 타임라인
 function dayEndCard(s,p,t,tl,otUI){
@@ -806,7 +860,7 @@ function dayEndCard(s,p,t,tl,otUI){
   const tomorrowSub=!st.uRemaining?"시즌 의뢰서 전부 완료":!st.leftTomorrow?"제작일이 안 남았어요":t.R?`오늘 못 한 ${t.R}건 나눠 담음`:t.extra?`더 한 ${t.extra}건만큼 줄었어요`:`남은 ${st.uRemaining}건 ÷ ${st.leftTomorrow}일`;
   const head=!n?"오늘은 완료한 게 없어요":t.R?`오늘 ${n}건 완료`:t.extra?`오늘 ${n}건 완료 · 목표보다 +${t.extra} 🎉`:`오늘 몫 다 했어요 🎉`;
   return `<section class="card tr-card tr-dayend"><div class="tr-eyebrow">🌇 오늘 마무리 · ${md(st.today)}${c.ot?` · 🌙 야근 ${clock(c.ot.s)}–${clock(c.ot.e)}`:""}</div><h3 class="tr-dayend-title">${head}</h3>
-  <div class="tr-dayend-stats"><div><small>오늘 완료</small><b><span class="tr-ok">${n}</span> / ${p.goal}건</b><span>${files!==n?`파일 ${files}개`:t.R?`${t.R}건 남음`:"목표 달성 ✓"}</span></div><div><small>건당</small><b>${n?fmtDur(avg).replace(/시간|분/g,x=>`<small>${x}</small>`):"–"}</b><span>${n?`아침 계획 ${fmtDur(t.base)}`:"출근부터 마지막 완료까지"}</span></div><div><small>${nextLabel}</small><b>${tomorrow}</b><span>${tomorrowSub}</span></div></div>
+  <div class="tr-dayend-stats"><div><small>오늘 완료</small><b><span class="tr-ok">${n}</span> / ${p.goal}건</b><span>${files!==n?`파일 ${files}개`:t.R?`${t.R}건 남음`:"목표 달성 ✓"}</span></div><div><small>건당</small><b>${n?fmtDur(avg).replace(/시간|분/g,x=>`<small>${x}</small>`):"–"}</b><span>${n?`보통 ${fmtDur(typicalMin(s))} 잡음`:"출근부터 마지막 완료까지"}</span></div><div><small>${nextLabel}</small><b>${tomorrow}</b><span>${tomorrowSub}</span></div></div>
   ${fast?`<p class="tr-time-sub">⚡ 제일 빨리 끝낸 건 <b>${esc(fast.u.group?fast.u.group.name:fast.u.items[0].code)}</b> ${fmtDur(fast.m)}</p>`:""}${forecastLine(s,p)}${otUI}${tl}</section>`;
 }
 // 야근 시작·연장·끝 (오늘 날짜로 시즌 설정에 저장 → 맥·폰 같이)
@@ -828,8 +882,8 @@ async function setOvertime(kind){
 }
 function timerBar(s,p){
   const x=activeSession(),it=x&&byId("items",x.item_id);if(!it)return"";
-  let goal=0;if(p.workday&&p.goal){const t=timePlan(s,p);if(t.R&&t.phase!=="after")goal=t.slotLen}
-  return `<section class="card tr-card tr-stopwatch" ${goal?`data-goal="${Math.round(goal*60)}"`:""}><button class="tr-thumb-btn" data-open="${esc(it.id)}">${thumbHTML(it,"xs")}</button><div class="tr-sw-main"><div class="tr-eyebrow">⏱ 타이머 · ${hm(x.started_at)} 시작${goal?` · 이 건에 쓸 시간 ${fmtDur(goal)}`:""}</div><b class="tr-sw-code">${esc(it.code)}</b></div><div class="tr-sw-clock"><b data-tick>00:00</b>${goal?`<small data-tick-left></small>`:""}</div><div class="tr-actions"><button class="tr-btn primary" data-tdone="${esc(it.id)}">✓ 완료</button><button class="tr-btn ghost" data-act="timer-off">끄기</button></div></section>`;
+  const goal=timerGoal(x);
+  return `<section class="card tr-card tr-stopwatch"><button class="tr-thumb-btn tr-sw-thumb" data-open="${esc(it.id)}">${thumbHTML(it)}</button><div class="tr-sw-main"><div class="tr-eyebrow">⏱ 타이머 · ${hm(x.started_at)} 시작${goal?` · 목표 ${fmtDur(goal)}`:""}</div><b class="tr-sw-code">${esc(it.code)}</b><div class="tr-sw-clock"><b data-tick>00:00</b><small data-tick-sub></small></div>${goal?`<div class="tr-sw-bar"><i></i></div>`:""}<div class="tr-actions"><button class="tr-btn primary" data-tdone="${esc(it.id)}">✓ 완료</button>${goal?`<button class="tr-btn" data-act="timer-ext">+5분</button>`:""}<button class="tr-btn ghost" data-act="timer-stop">■ 멈춤</button></div></div></section>`;
 }
 function heroCard(s,p){
   // 오늘 몫을 다 했으면 다음 작업일 것 중에서 "하나 더"를 보여준다
@@ -842,15 +896,21 @@ function heroCard(s,p){
 function itemRow(it,p,s){
   return `<div class="tr-row ${isDone(it)?"done":""}" data-item="${esc(it.id)}"><button class="bigcheck ${isDone(it)?"on":""}" data-tdone="${esc(it.id)}" data-tundo="${isDone(it)?1:""}" title="${isDone(it)?"완료 취소":"완료"}">✓</button><button class="tr-thumb-btn" data-open="${esc(it.id)}">${thumbHTML(it,"xs")}</button><div class="tr-row-main"><div class="tr-row-title">${esc(it.code)}${p.carried.includes(it.id)&&!isDone(it)?` <span class="tr-chip carry">이월</span>`:""}${activeSession()?.item_id===it.id?` <span class="tr-chip live">⏱ 재는 중</span>`:""}${it.group_id&&byId("groups",it.group_id)?` <span class="tr-chip">🔗 ${esc(byId("groups",it.group_id).name)}</span>`:""}</div><div class="tr-sub">${esc(conceptName(it.concept_id))}${it.item_type?" · "+esc(typeName(s,it.item_type)||it.item_type):""}${isDone(it)?" · "+esc(recordLine(it)):""}</div></div>${isDone(it)||activeSession()?.item_id===it.id?"":`<button class="tr-btn sm ghost" data-timer="${esc(it.id)}" title="타이머 시작" aria-label="타이머 시작">⏱</button>`}</div>`;
 }
+// 오늘 화면 카드: 그림 크게 (추천 순서 번호 · 아래쪽에 ⏱ 와 완료 버튼)
+function todayCard(it,p,s,n){
+  const done=isDone(it),live=activeSession()?.item_id===it.id,g=it.group_id&&byId("groups",it.group_id);
+  return `<div class="tr-card-item tr-tcard ${done?"done":""} ${live?"live":""}" style="${cvars(it.concept_id)}" data-item="${esc(it.id)}" data-open="${esc(it.id)}" role="button" tabindex="0"><div class="tr-card-thumb">${thumbHTML(it)}${n?`<span class="tr-tnum">${n}</span>`:""}<span class="tr-tchips">${p.carried.includes(it.id)&&!done?`<span class="tr-chip carry">이월</span>`:""}${live?`<span class="tr-chip live">⏱ 재는 중</span>`:""}${g?`<span class="tr-chip">🔗 ${esc(g.name)}</span>`:""}</span>${done||live?"":`<button class="tr-statebtn tr-timerbtn" data-timer="${esc(it.id)}" title="타이머 시작">⏱ 타이머</button>`}<button class="tr-statebtn ${done?"is-done":""}" data-tdone="${esc(it.id)}" data-tundo="${done?1:""}" title="${done?"누르면 미완료로":"누르면 완료로"}">${done?"✓ 완료":"미완료"}</button></div><span class="tr-card-label"><i class="tr-cdot"></i>${esc(it.code)} <small>${esc(conceptName(it.concept_id))}${done?" · "+esc(recordLine(it)):""}</small></span></div>`;
+}
 function viewToday(s){
   const p=todayPlan(s);saveSnapshot(s,p);
   const todoItems=(p.workday?p.todo:p.next.slice(0,5)).map(id=>byId("items",id)).filter(Boolean);
   const shown=TR.oneOnly?todoItems.slice(0,1):todoItems;
   const unconfirmed=itemsOf(s.id).filter(i=>i.auto_done!=null&&!i.confirmed).length;
-  return `${timerBar(s,p)}${goalBar(p)}${timeCard(s,p)}${heroCard(s,p)}
+  const zoom=`<span class="tr-zoom" role="group" aria-label="그림 크기"><button data-tzoom="-1" ${TR.tzoom<=1?"disabled":""} aria-label="작게" title="작게">−</button><button data-tzoom="1" ${TR.tzoom>=ZOOMS.length?"disabled":""} aria-label="크게" title="크게">＋</button></span>`;
+  return `${timerBar(s,p)}${goalBar(p)}${activeSession()?"":timeCard(s,p)}${heroCard(s,p)}
   ${unconfirmed?`<button class="tr-notice" data-view="season">🤖 자동 추정 확인이 필요한 의뢰서 ${unconfirmed}건 →</button>`:""}
-  <section class="section"><div class="section-title"><h3>${p.workday?"오늘 할 의뢰서":"다음에 할 의뢰서"}</h3><span><button class="tr-link" data-act="one-only">${TR.oneOnly?"전체 보기":"다음 하나만"}</button></span></div><div class="tr-list">${shown.length?shown.map(it=>itemRow(it,p,s)).join(""):`<div class="empty">${p.st.target?"남은 의뢰서가 없어요.":"아직 등록된 의뢰서가 없어요."}</div>`}${TR.oneOnly&&todoItems.length>1?`<div class="tr-more">+ ${todoItems.length-1}건은 숨겨 뒀어요</div>`:""}</div></section>
-  <section class="section"><div class="section-title"><h3>오늘 완료 기록</h3><span>${p.doneToday.length}건</span></div><div class="tr-list">${p.doneToday.length?[...p.doneToday].sort((a,b)=>(b.completed_at||"").localeCompare(a.completed_at||"")).map(it=>itemRow(it,p,s)).join(""):`<div class="empty">아직 완료한 의뢰서가 없어요.</div>`}</div></section>`;
+  <section class="section tr-today" data-zoom="${TR.tzoom}"><div class="section-title"><h3>${p.workday?"오늘 할 의뢰서":"다음에 할 의뢰서"}</h3><span class="tr-today-tools"><button class="tr-link" data-act="one-only">${TR.oneOnly?"전체 보기":"다음 하나만"}</button>${zoom}</span></div>${shown.length?`<div class="tr-grid tr-today-grid" style="--tr-card:${ZOOMS[TR.tzoom-1]||300}px">${shown.map((it,n)=>todayCard(it,p,s,n+1)).join("")}</div>`:`<div class="empty">${p.st.target?"남은 의뢰서가 없어요.":"아직 등록된 의뢰서가 없어요."}</div>`}${TR.oneOnly&&todoItems.length>1?`<div class="tr-more">+ ${todoItems.length-1}건은 숨겨 뒀어요</div>`:""}</section>
+  <section class="section"><div class="section-title"><h3>오늘 완료 기록</h3><span>${p.doneToday.length}건</span></div>${p.doneToday.length?`<div class="tr-grid tr-today-grid tr-today-done">${[...p.doneToday].sort((a,b)=>(b.completed_at||"").localeCompare(a.completed_at||"")).map(it=>todayCard(it,p,s,0)).join("")}</div>`:`<div class="empty">아직 완료한 의뢰서가 없어요.</div>`}</section>`;
 }
 const DIFF=[["S","쉬움"],["M","중간"],["L","어려움"]];
 const DIFF_LABEL=Object.fromEntries(DIFF);
@@ -953,10 +1013,12 @@ function openSheet(id){TR.detail=id;renderSheet();if(!sheet.open)sheet.showModal
 /* ---------- 이벤트 ---------- */
 async function onClick(e){
   const b=e.target.closest("button,[data-open]");if(!b||!root.contains(b))return;
-  const d=b.dataset;
+  const d=b.dataset;primeAlert(false);
+  if(d.pickmin){const f=b.closest("form");f.elements.min.value=d.pickmin;f.querySelectorAll("[data-pickmin]").forEach(x=>x.classList.toggle("on",x===b));return}
   if(d.view){TR.view=d.view;TR.selecting=false;TR.selected.clear();saveUI();if(sheet.open)sheet.close();render();main.scrollTo?.(0,0);return}
   if(d.ctab){TR.conceptTab=d.ctab;saveUI();render();return}
   if(d.ot){await setOvertime(d.ot);return}
+  if(d.tzoom){TR.tzoom=Math.min(ZOOMS.length,Math.max(1,TR.tzoom+Number(d.tzoom)));saveUI();render();return}
   if(d.zoom){TR.zoom=Math.min(ZOOMS.length,Math.max(1,TR.zoom+Number(d.zoom)));saveUI();render();return}
   if(d.collapse){TR.collapsed[d.collapse]=!TR.collapsed[d.collapse];saveUI();render();return}
   // 선택 모드에서는 카드를 누르면 열지 않고 체크만
@@ -966,7 +1028,7 @@ async function onClick(e){
   if(d.cmove){const s=season();if(!s)return;const list=conceptsOf(s.id),i=list.findIndex(c=>c.id===d.cmove),j=i+Number(d.dir);if(i<0||j<0||j>=list.length)return;[list[i],list[j]]=[list[j],list[i]];await put({concepts:list.map((c,n)=>({...c,sort:n+1}))});return}
   if(d.gundo){const g=byId("groups",d.gundo);if(!g)return;await remove("groups",g.id);toast(`${g.name} 묶음을 풀었어요. 의뢰서는 그대로예요.`);return}
   if(d.open&&!e.target.closest("[data-tdone],[data-timer]")){openSheet(d.open);return}
-  if(d.timer){await startTimer(d.timer);return}
+  if(d.timer){openTimerPick(d.timer);return}
   if(d.tdone){e.stopPropagation();await setDone(d.tdone,!d.tundo);return}
   if(d.target){
     const c=byId("concepts",d.target);if(!c)return;
@@ -983,7 +1045,9 @@ async function onClick(e){
   if(d.delConcept){const c=byId("concepts",d.delConcept),n=TR.data.items.filter(i=>i.concept_id===c.id).length;if(!confirm(`${c.name} 컨셉을 지울까요?${n?` 의뢰서 ${n}건도 함께 지워져요.`:""}`))return;if(TR.conceptTab===c.id)TR.conceptTab="all";await remove("concepts",c.id);return}
   switch(d.act){
     case"close":closeTracker();break;
-    case"timer-off":await stopTimer();break;
+    case"timer-stop":await stopTimer();break;
+    case"timer-ext":await extendTimer();break;
+    case"pick-close":pick.close();break;
     case"skip":TR.skip++;render();break;
     case"one-only":TR.oneOnly=!TR.oneOnly;saveUI();render();break;
     case"pick":root.querySelector("#tr-file").click();break;
@@ -1008,6 +1072,7 @@ document.addEventListener("submit",async e=>{
   const f=e.target.closest?.("form[data-form]");if(!f||!root?.contains(f))return;
   e.preventDefault();
   const v=Object.fromEntries(new FormData(f)),s=season(),kind=f.dataset.form;
+  if(kind==="timer"){const m=Math.round(Number(v.min));if(!(m>=1&&m<=600)){toast("1~600분 사이로 적어 주세요.");return}await startTimer(f.dataset.id,m);return}
   if(kind==="season-new"){
     const name=slug(v.name);if(!name)return;
     if(TR.data.seasons.some(x=>x.id===name)){toast("이미 있는 시즌이에요.");return}
