@@ -157,6 +157,37 @@ body.tr-on{overflow:hidden}
 .tr-timerbtn{left:6px;right:auto}
 .tr-today-done{--tr-card:150px}
 .tr-today-done .tr-card-label small{display:block}
+/* 아침 오늘 시작 */
+.tr-start{border-color:#efd58a;background:linear-gradient(180deg,#fff9e8,#fffdf8 70%)}
+.tr-start h3{margin:2px 0 10px;font-size:20px;font-weight:800}
+.tr-start-auto{display:inline-flex;align-items:baseline;gap:6px;padding:6px 12px;margin-bottom:10px;border-radius:99px;background:#fff;border:1px solid #f1e2bd;font-size:15px;font-weight:700}
+.tr-start-auto small{font-size:12px;font-weight:600;color:var(--muted)}
+.tr-start-have{display:flex;flex-wrap:wrap;align-items:center;gap:6px;margin-bottom:10px}
+.tr-start-have small{font-size:12px;font-weight:700;color:var(--muted);margin-right:2px}
+.tr-start textarea{display:block;width:100%;box-sizing:border-box;min-height:128px;padding:10px 12px;border:1px solid var(--line);border-radius:var(--r-md);background:#fff;font:inherit;font-size:16px;line-height:1.7;resize:vertical}
+.tr-start textarea:focus{outline:2px solid #efc54d;outline-offset:0}
+.tr-start-foot{display:flex;align-items:center;flex-wrap:wrap;gap:8px;margin-top:10px}
+.tr-start-foot .primary{margin-left:auto}
+.tr-start-preview{font-size:14px;font-weight:700;color:var(--ink-2)}
+/* 오늘 할 일 */
+.tr-todo-head{display:flex;justify-content:space-between;align-items:flex-start;gap:10px}
+.tr-todo h3{margin:2px 0 0;font-size:22px;font-weight:800}
+.tr-todo h3 small{font-size:15px;font-weight:700;color:var(--ink-2)}
+.tr-todo-min{font-size:14px;font-weight:700;color:#6b5aa6;padding-top:4px}
+.tr-todo-list{display:grid;gap:4px;margin-top:10px}
+.tr-todo-row{display:grid;grid-template-columns:auto auto minmax(0,1fr) auto auto;gap:8px;align-items:center;padding:6px 6px 6px 4px;border-radius:var(--r-sm);background:#faf8f5}
+.tr-todo-row .tr-grip{cursor:grab;padding:0 2px;touch-action:none}
+.tr-todo-check{width:26px;height:26px;border-radius:8px;border:2px solid #d8d0c5;background:#fff;color:transparent;font-weight:900;font-size:14px;line-height:1;padding:0}
+.tr-todo-check.on{background:var(--ok);border-color:var(--ok);color:#fff}
+.tr-todo-title{font-size:16px;font-weight:600;overflow-wrap:anywhere}
+.tr-todo-row.done .tr-todo-title{color:var(--muted);text-decoration:line-through;text-decoration-color:var(--ok)}
+.tr-todo-x{border:0;background:none;color:var(--faint);font-size:20px;line-height:1;width:28px;height:28px;padding:0}
+.tr-todo-x:hover{color:var(--danger)}
+.tr-todo-add{display:flex;gap:6px;margin-top:8px}
+.tr-todo-add input{flex:1;min-width:0;padding:8px 10px;border:1px dashed var(--line);border-radius:var(--r-sm);background:#fff;font:inherit;font-size:15px}
+.tr-todo-carry{margin-top:6px}
+.tr-tl-seg.todo{background:#e8e1f6;border:1px solid #c3b5e6}
+.tr-tl-legend .todo{background:#e8e1f6;border:1px solid #c3b5e6}
 /* 완료 예상일 */
 .tr-forecast{grid-column:1/-1;margin:10px 4px 0;padding:9px 12px;border-radius:var(--r-md);background:#f3f7f1;font-size:15px;font-weight:600;color:var(--ink-2);text-align:left}
 .tr-forecast b{font-weight:800;color:var(--ink)}
@@ -332,6 +363,9 @@ body.tr-on{overflow:hidden}
 .tr-toast.on{opacity:1;transform:translate(-50%,0)}
 
 @media(max-width:680px){
+  .tr-todo-head{flex-direction:column;gap:2px}
+  .tr-todo-min{padding-top:0}
+  .tr-todo h3 small{white-space:nowrap}
   .tr-stopwatch{grid-template-columns:110px minmax(0,1fr);gap:12px}
   .tr-sw-clock b{font-size:36px}
   .tr-today[data-zoom="3"] .tr-grid,.tr-today[data-zoom="4"] .tr-grid,.tr-today[data-zoom="5"] .tr-grid{grid-template-columns:1fr}

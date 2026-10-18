@@ -12,7 +12,7 @@ const TR={
   data:{seasons:[],concepts:[],groups:[],items:[],sessions:[],days:[]},
   thumbs:{},loaded:false,offline:false,pending:0,
   open:false,view:"today",seasonId:"",conceptTab:"all",skip:0,oneOnly:false,detail:null,progress:"",
-  zoom:2,tzoom:4,collapsed:{},selecting:false,selected:new Set()
+  zoom:2,tzoom:4,drafts:{},collapsed:{},selecting:false,selected:new Set()
 };
 try{Object.assign(TR,JSON.parse(localStorage.getItem(UI_KEY)||"{}"))}catch(e){}
 const saveUI=()=>{try{localStorage.setItem(UI_KEY,JSON.stringify({view:TR.view,seasonId:TR.seasonId,conceptTab:TR.conceptTab,oneOnly:TR.oneOnly,zoom:TR.zoom,tzoom:TR.tzoom,collapsed:TR.collapsed}))}catch(e){}};
@@ -53,7 +53,7 @@ function applyRemote(r){
   try{localStorage.setItem(CACHE_KEY,JSON.stringify({data:TR.data,at:nowISO()}))}catch(e){}
 }
 async function load(){
-  try{applyRemote(await apiGet("tracker"))}
+  try{const [r,td]=await Promise.all([apiGet("tracker"),apiGet("tasks").catch(()=>null)]);applyRemote(r);if(td){TASKS={updatedAt:nowISO(),tasks:(td.tasks||[]).map(mapTask)};try{cacheRemote()}catch(x){}}}
   catch(e){
     if(e.message==="SETUP_REQUIRED"||e.message==="AUTH")throw e;
     try{const c=JSON.parse(localStorage.getItem(CACHE_KEY)||"null");if(c?.data){TR.data={...TR.data,...c.data};TR.loaded=true}}catch(x){}
@@ -86,6 +86,59 @@ function removeLocal(kind,id){
   for(const k of KINDS)if(TR.data[k].some(x=>x[field]===id))TR.data[k].filter(x=>x[field]===id).forEach(x=>removeLocal(k,x.id));
 }
 async function remove(kind,id){if(!guardOnline())return;removeLocal(kind,id);render();try{await send({action:"tracker_delete",table:TABLE[kind],ids:[id]})}catch(e){}}
+
+/* ---------- 오늘 할 일: 비서 할 일 목록(tasks)에 오늘 날짜로 저장 → 메인 "오늘 꼭 할 일"·Grok과 같이 ---------- */
+const DUR=/(\d+(?:\.\d+)?)\s*시간(?:\s*(\d+)\s*분)?|(\d+)\s*분|(\d+(?:\.\d+)?)\s*h\b|(\d+)\s*m(?:in)?\b/i;
+// "팀장님 메일 회신 15분" → {title:"팀장님 메일 회신", min:15} ("3시 회의 1시간"의 3시는 시각이라 그대로)
+function parseTodo(line){
+  let title=String(line||"").replace(/^[\s\-•*·☐□✓✔]+/,"").trim(),min=null;if(!title)return null;
+  const m=DUR.exec(title);
+  if(m){min=m[1]?Math.round(parseFloat(m[1])*60+(Number(m[2])||0)):m[3]?Number(m[3]):m[4]?Math.round(parseFloat(m[4])*60):Number(m[5]);title=(title.slice(0,m.index)+title.slice(m.index+m[0].length)).replace(/\s{2,}/g," ").replace(/[\s,·\-–]+$/,"").trim()||title}
+  return {title:title.slice(0,200),min:min>0&&min<=720?min:null};
+}
+const parseTodos=text=>String(text||"").split(/\n+/).map(parseTodo).filter(Boolean);
+const taskDone=t=>t.status==="done";
+function todayTodos(){const d=todayISO();return (TASKS?.tasks||[]).filter(t=>t.due===d&&t.status!=="later").sort((a,b)=>taskDone(a)-taskDone(b)||(a.priority-b.priority)||(a.createdAt||"").localeCompare(b.createdAt||""))}
+// 지난 2주 안에 트래커에서 적었는데 못 한 것
+function carryTodos(){const d=todayISO(),from=D.add(d,-14);return (TASKS?.tasks||[]).filter(t=>String(t.id).startsWith("trk-")&&!taskDone(t)&&t.status!=="later"&&t.due&&t.due<d&&t.due>=from)}
+const todoMin=list=>list.filter(t=>!taskDone(t)).reduce((a,t)=>a+(Number(t.estimateMin)||0),0);
+async function addTodos(items){
+  if(!items.length||!guardOnline())return;
+  const d=todayISO(),list=todayTodos(),base=list.length?Math.max(...list.map(t=>t.priority||0)):0;
+  const rows=items.map((x,n)=>({external_id:`trk-${d}-${crypto.randomUUID().slice(0,8)}`,title:x.title,category:"work",due_date:d,priority:base+n+1,urgent:false,status:"todo",estimate_min:x.min,source:"tracker"}));
+  rows.forEach(r=>TASKS.tasks.push(mapTask({...r,created_at:nowISO()})));
+  render();
+  for(const r of rows){try{const res=await send({action:"upsert_task",task:r},"할 일을 저장하지 못했어요.");const i=TASKS.tasks.findIndex(t=>t.id===r.external_id);if(res?.task&&i>=0)TASKS.tasks[i]=mapTask(res.task)}catch(e){return}}
+  try{cacheRemote()}catch(e){}
+}
+async function taskPatch(list,body,msg){for(const t of list){try{await send(body(t),msg)}catch(e){return false}}try{cacheRemote()}catch(e){}return true}
+async function toggleTodo(id){
+  const t=TASKS.tasks.find(x=>x.id===id);if(!t||!guardOnline())return;
+  const done=!taskDone(t);t.status=done?"done":"todo";t.completedAt=done?nowISO():"";render();
+  await taskPatch([t],x=>({action:"complete_task",external_id:x.id,done}),"저장하지 못했어요.");
+}
+// 빼기는 지우지 않고 날짜만 비운다 (비서 화면 '날짜 미정'으로)
+async function dropTodo(id){
+  const t=TASKS.tasks.find(x=>x.id===id);if(!t||!guardOnline())return;
+  t.due="";render();
+  if(await taskPatch([t],x=>({action:"update_task",external_id:x.id,patch:{due_date:null}})))toast(`"${t.title}" 오늘에서 뺐어요 · 비서 화면 '날짜 미정'에 있어요`);
+}
+async function carryIn(){
+  const list=carryTodos(),d=todayISO();if(!list.length||!guardOnline())return;
+  list.forEach(t=>t.due=d);render();
+  if(await taskPatch(list,x=>({action:"update_task",external_id:x.id,patch:{due_date:d}})))toast(`못 한 ${list.length}개를 오늘로 가져왔어요`);
+}
+// 업무·개인이 섞여 있어도 보이는 순서 그대로 (바뀐 것만 priority 저장)
+async function reorderTodos(ids){
+  const changed=[];ids.forEach((id,n)=>{const t=TASKS.tasks.find(x=>x.id===id);if(t&&t.priority!==n+1){t.priority=n+1;changed.push(t)}});render();
+  await taskPatch(changed,x=>({action:"update_task",external_id:x.id,patch:{priority:x.priority}}));
+}
+async function startDay(text){
+  const s=season(),items=parseTodos(text);
+  if(s)await put({seasons:[{...s,settings:{...(s.settings||{}),day_start:todayISO()}}]});
+  await addTodos(items);
+  toast(items.length?`☀️ 할 일 ${items.length}개 적고 시작!`:"☀️ 오늘 시작!");
+}
 
 /* ---------- 계산 ---------- */
 const isWorkday=(s,iso)=>{const w=D.dow(iso);return w>0&&w<6&&!(s.holidays||[]).includes(iso)};
@@ -748,7 +801,16 @@ function build(){
   root.addEventListener("change",onChange);
   root.querySelector("#tr-file").onchange=e=>{importFiles([...e.target.files]);e.target.value=""};
   root.querySelector("#tr-folder").onchange=e=>{importFiles([...e.target.files]);e.target.value=""};
-  root.addEventListener("keydown",e=>{if(e.key==="Enter"&&e.target.matches?.("[data-open][role=button]"))openSheet(e.target.dataset.open)});
+  root.addEventListener("keydown",e=>{
+    if(e.key==="Enter"&&e.target.matches?.("[data-open][role=button]"))openSheet(e.target.dataset.open);
+    // 아침 칸: ⌘/Ctrl+Enter로 바로 시작
+    if(e.key==="Enter"&&(e.metaKey||e.ctrlKey)&&e.target.matches?.("[data-todo-draft]")){e.preventDefault();e.target.form.requestSubmit()}
+  });
+  root.addEventListener("input",e=>{
+    const t=e.target;if(t.name!=="todos"&&t.name!=="t")return;
+    TR.drafts[t.name]=t.value;
+    if(t.name==="todos"){const pv=t.form?.querySelector("[data-todo-preview]");if(pv)pv.textContent=todoPreview(t.value)}
+  });
   root.querySelector("#tr-thumb-file").onchange=e=>{const f=e.target.files[0];if(f&&TR.detail)replaceThumb(TR.detail,f);e.target.value=""};
   sheet.addEventListener("close",()=>{TR.detail=null});
   sheet.addEventListener("click",e=>{if(e.target===sheet)sheet.close()});
@@ -784,7 +846,7 @@ function openTracker(){
   // 30초마다 오늘 화면을 다시 그려서 시간표(여유·지금 위치)가 흐르게
   clearInterval(tick);tick=setInterval(()=>{if(TR.open&&TR.view==="today"&&!sheet.open&&!pick.open&&!TR.dragging&&!TR.selecting)render()},30000);
 }
-function closeTracker(){TR.open=false;if(root)root.hidden=true;document.body.classList.remove("tr-on");clearInterval(tick);if(location.hash==="#tracker")history.replaceState(null,"",location.pathname+location.search)}
+function closeTracker(){try{window.render?.()}catch(e){}TR.open=false;if(root)root.hidden=true;document.body.classList.remove("tr-on");clearInterval(tick);if(location.hash==="#tracker")history.replaceState(null,"",location.pathname+location.search)}
 
 function render(){
   if(!root||!TR.open||TR.dragging)return;
@@ -796,11 +858,20 @@ function render(){
   if(!TR.loaded){main.innerHTML=`<div class="empty">불러오는 중…</div>`;return}
   const s=season();
   if(!s&&TR.view!=="settings"){main.innerHTML=seasonSetup();return}
+  const af=document.activeElement,keep=af&&main.contains(af)&&(af.name==="todos"||af.name==="t")?[af.name,af.selectionStart,af.selectionEnd]:null;
   main.innerHTML=TR.view==="season"?viewSeason(s):TR.view==="log"?viewLog(s):TR.view==="settings"?viewSettings(s):viewToday(s);
+  if(keep){const el=main.querySelector(`[name="${keep[0]}"]`);if(el){el.focus();try{el.setSelectionRange(keep[1],keep[2])}catch(e){}}}
+  bindTodoSort();
   root.style.setProperty("--tr-top-h",root.querySelector(".tr-top").offsetHeight+"px");
   if(TR.view==="season")bindSortables();else if(sortables.length){sortables.forEach(x=>x.destroy());sortables=[]}
   updateTimers();
   if(TR.detail&&sheet.open)renderSheet();
+}
+let todoSort=null;
+function bindTodoSort(){
+  todoSort?.destroy();todoSort=null;
+  const el=main.querySelector(".tr-todo-list");if(!el||el.children.length<2)return;
+  loadSortable().then(S=>{if(!el.isConnected)return;todoSort=new S(el,{handle:".tr-grip",animation:150,forceFallback:true,fallbackOnBody:true,ghostClass:"tr-ghost",onStart:()=>{TR.dragging=true},onEnd:e=>{TR.dragging=false;if(e.oldIndex===e.newIndex){render();return}reorderTodos([...el.querySelectorAll("[data-todo]")].map(x=>x.dataset.todo))}})}).catch(()=>{});
 }
 function seasonSetup(){
   return `<section class="card tr-card"><h3>시즌부터 만들어요</h3><p class="tr-sub">마감일과 검수 여유일로 하루 필요량을 계산해요.</p><form class="tr-form" data-form="season-new"><label>시즌<input name="name" value="27SS" required></label><label>마감일<input type="date" name="deadline" value="2026-11-03" required></label><label>검수 여유일 <small>영업일</small><input type="number" name="review_days" min="0" max="10" value="1"></label><button class="tr-btn primary" type="submit">시즌 만들기</button></form></section>`;
@@ -820,15 +891,15 @@ function timeCard(s,p){
   if(!p.workday||!p.goal)return"";
   const t=timePlan(s,p),c=t.c,span=c.e-c.s,pos=m=>Math.max(0,Math.min(100,(m-c.s)/span*100));
   const otBtns=(label)=>`<div class="tr-ot"><span>${label}</span>${[60,120,180].map(x=>`<button class="tr-btn sm" data-ot="${x}">${x/60}시간</button>`).join("")}<button class="tr-btn sm ghost" data-ot="pick">직접</button></div>`;
-  const typ=typicalMin(s),R=t.R,from=Math.max(t.now,c.s),avail=workBetween(from,c.e,c),need=R*typ,slack=avail-need;
+  const typ=typicalMin(s),R=t.R,from=Math.max(t.now,c.s),avail=workBetween(from,c.e,c),need=R*typ,tMin=todoMin(todayTodos()),slack=avail-need-tMin;
   const hasGoals=Object.keys(s.settings?.timer_goals||{}).length>0;
   let big,sub;
   if(!R){
     big=t.overtime?"🌙 보너스 타임":"오늘 몫 끝! 🎉";
-    sub=`${t.overtime?`야근 끝(${clock(c.e)})까지`:"퇴근까지"} <b>${fmtDur(t.nowRem)}</b>${t.extra?` · 목표보다 <b class="tr-ok">+${t.extra}건</b>`:""} · 하나 더 할 때마다 내일 목표가 줄어요 (지금 내일 <b>${p.tomorrowIfStop}</b>건)`;
+    sub=`${t.overtime?`야근 끝(${clock(c.e)})까지`:"퇴근까지"} <b>${fmtDur(t.nowRem)}</b>${tMin?` · 남은 할 일 <b>${fmtDur(tMin)}</b>`:""}${t.extra?` · 목표보다 <b class="tr-ok">+${t.extra}건</b>`:""} · 하나 더 할 때마다 내일 목표가 줄어요 (지금 내일 <b>${p.tomorrowIfStop}</b>건)`;
   }else{
     big=slack>=0?`여유 <b class="tr-slack">${fmtDur(slack)}</b>`:`<span class="tr-over">${fmtDur(-slack)} 부족</span>`;
-    sub=`${t.phase==="before"?`${clock(c.s)} 출근부터`:t.overtime||t.phase==="gap"?`야근 끝(${clock(c.e)})까지`:"퇴근까지"} <b>${fmtDur(avail)}</b> · 남은 ${R}건 × 보통 ${fmtDur(typ)} = <b>${fmtDur(need)}</b>${slack<0?` · 오늘 다 하려면 건당 <b class="tr-em">${fmtDur(avail/R)}</b> 안에`:""}`;
+    sub=`${t.phase==="before"?`${clock(c.s)} 출근부터`:t.overtime||t.phase==="gap"?`야근 끝(${clock(c.e)})까지`:"퇴근까지"} <b>${fmtDur(avail)}</b> · 남은 ${R}건 × 보통 ${fmtDur(typ)} = <b>${fmtDur(need)}</b>${tMin?` + 할 일 <b>${fmtDur(tMin)}</b>`:""}${slack<0?` · 오늘 다 하려면 건당 <b class="tr-em">${fmtDur(Math.max(0,avail-tMin)/R)}</b> 안에`:""}`;
     if(t.phase==="lunch")sub=`🍚 점심시간 · ${clock(c.le)}부터 다시 · `+sub;
     if(t.phase==="gap")sub=`☕ 쉬는 중 · ${clock(c.ot.s)}부터 야근 · `+sub;
   }
@@ -839,11 +910,12 @@ function timeCard(s,p){
   t.ends.forEach((e,i)=>{const st=i?t.ends[i-1]:c.s,u=t.doneU[i];bars+=seg(st,e,i>=p.goal?"done bonus":"done",`${clock(e)} 완료 · ${u.group?u.group.name:u.items[0].code}`)});
   if(R&&t.phase!=="after"){
     for(let k=0;k<R;k++){const a=addWork(from,typ*k,c);if(a>=c.e)break;bars+=seg(a,Math.min(c.e,addWork(from,typ*(k+1),c)),"next",`남은 일 ${k+1} · 보통 ${fmtDur(typ)}`)}
-    if(slack>0)bars+=seg(addWork(from,need,c),c.e,"slack",`여유 ${fmtDur(slack)}`);
+    if(tMin&&addWork(from,need,c)<c.e)bars+=seg(addWork(from,need,c),Math.min(c.e,addWork(from,need+tMin,c)),"todo",`할 일 ${fmtDur(tMin)}`);
+    if(slack>0)bars+=seg(addWork(from,need+tMin,c),c.e,"slack",`여유 ${fmtDur(slack)}`);
   }
   const ticks=[],step=span>720?2:1;for(let h=Math.ceil(c.s/60);h*60<=c.e;h+=step)ticks.push(`<span style="left:${pos(h*60)}%">${h}</span>`);
   const nowMark=t.now>=c.s&&t.now<=c.e?`<b class="tr-tl-now" style="left:${pos(t.now)}%"><em>${clock(Math.floor(t.now))}</em></b>`:"";
-  const tl=`<div class="tr-tl"><div class="tr-tl-track">${bars}${nowMark}</div><div class="tr-tl-ticks">${ticks.join("")}</div></div><div class="tr-tl-legend"><span><i class="done"></i>끝낸 것</span><span><i class="next"></i>남은 일 (보통 ${fmtDur(typ)})</span><span><i class="slack"></i>여유</span><span><i class="lunch"></i>점심·쉼</span>${c.ot?`<span><i class="ot"></i>야근</span>`:""}</div>`;
+  const tl=`<div class="tr-tl"><div class="tr-tl-track">${bars}${nowMark}</div><div class="tr-tl-ticks">${ticks.join("")}</div></div><div class="tr-tl-legend"><span><i class="done"></i>끝낸 것</span><span><i class="next"></i>남은 일 (보통 ${fmtDur(typ)})</span>${tMin?`<span><i class="todo"></i>할 일</span>`:""}<span><i class="slack"></i>여유</span><span><i class="lunch"></i>점심·쉼</span>${c.ot?`<span><i class="ot"></i>야근</span>`:""}</div>`;
   if(t.phase==="after")return dayEndCard(s,p,t,tl,otBtns(t.R?"🌙 더 할래요":"🌙 조금 더 할래요"));
   const otInfo=c.ot?` · 🌙 야근 ${clock(c.ot.s)}–${clock(c.ot.e)}`:"";
   const otCtl=t.overtime||t.phase==="gap"?`<div class="tr-ot"><span>🌙 야근 중 · ${clock(c.ot.e)}까지</span><button class="tr-btn sm" data-ot="ext">+1시간</button><button class="tr-btn sm ghost" data-ot="end">야근 끝</button></div>`:"";
@@ -861,7 +933,7 @@ function dayEndCard(s,p,t,tl,otUI){
   const head=!n?"오늘은 완료한 게 없어요":t.R?`오늘 ${n}건 완료`:t.extra?`오늘 ${n}건 완료 · 목표보다 +${t.extra} 🎉`:`오늘 몫 다 했어요 🎉`;
   return `<section class="card tr-card tr-dayend"><div class="tr-eyebrow">🌇 오늘 마무리 · ${md(st.today)}${c.ot?` · 🌙 야근 ${clock(c.ot.s)}–${clock(c.ot.e)}`:""}</div><h3 class="tr-dayend-title">${head}</h3>
   <div class="tr-dayend-stats"><div><small>오늘 완료</small><b><span class="tr-ok">${n}</span> / ${p.goal}건</b><span>${files!==n?`파일 ${files}개`:t.R?`${t.R}건 남음`:"목표 달성 ✓"}</span></div><div><small>건당</small><b>${n?fmtDur(avg).replace(/시간|분/g,x=>`<small>${x}</small>`):"–"}</b><span>${n?`보통 ${fmtDur(typicalMin(s))} 잡음`:"출근부터 마지막 완료까지"}</span></div><div><small>${nextLabel}</small><b>${tomorrow}</b><span>${tomorrowSub}</span></div></div>
-  ${fast?`<p class="tr-time-sub">⚡ 제일 빨리 끝낸 건 <b>${esc(fast.u.group?fast.u.group.name:fast.u.items[0].code)}</b> ${fmtDur(fast.m)}</p>`:""}${forecastLine(s,p)}${otUI}${tl}</section>`;
+  ${(()=>{const l=todayTodos();return l.length?`<p class="tr-time-sub">📝 할 일 <b>${l.filter(taskDone).length}</b> / ${l.length}개 완료${l.some(x=>!taskDone(x))?` · 남은 건 내일 아침 "못 한 거 가져오기"로`:" ✓"}</p>`:""})()}${fast?`<p class="tr-time-sub">⚡ 제일 빨리 끝낸 건 <b>${esc(fast.u.group?fast.u.group.name:fast.u.items[0].code)}</b> ${fmtDur(fast.m)}</p>`:""}${forecastLine(s,p)}${otUI}${tl}</section>`;
 }
 // 야근 시작·연장·끝 (오늘 날짜로 시즌 설정에 저장 → 맥·폰 같이)
 async function setOvertime(kind){
@@ -896,6 +968,19 @@ function heroCard(s,p){
 function itemRow(it,p,s){
   return `<div class="tr-row ${isDone(it)?"done":""}" data-item="${esc(it.id)}"><button class="bigcheck ${isDone(it)?"on":""}" data-tdone="${esc(it.id)}" data-tundo="${isDone(it)?1:""}" title="${isDone(it)?"완료 취소":"완료"}">✓</button><button class="tr-thumb-btn" data-open="${esc(it.id)}">${thumbHTML(it,"xs")}</button><div class="tr-row-main"><div class="tr-row-title">${esc(it.code)}${p.carried.includes(it.id)&&!isDone(it)?` <span class="tr-chip carry">이월</span>`:""}${activeSession()?.item_id===it.id?` <span class="tr-chip live">⏱ 재는 중</span>`:""}${it.group_id&&byId("groups",it.group_id)?` <span class="tr-chip">🔗 ${esc(byId("groups",it.group_id).name)}</span>`:""}</div><div class="tr-sub">${esc(conceptName(it.concept_id))}${it.item_type?" · "+esc(typeName(s,it.item_type)||it.item_type):""}${isDone(it)?" · "+esc(recordLine(it)):""}</div></div>${isDone(it)||activeSession()?.item_id===it.id?"":`<button class="tr-btn sm ghost" data-timer="${esc(it.id)}" title="타이머 시작" aria-label="타이머 시작">⏱</button>`}</div>`;
 }
+// 아침 "오늘 시작" 카드: 한 줄에 하나씩 쫙 적고 시작 (시간을 적으면 여유에서 뺀다)
+function startCard(s,p){
+  const have=todayTodos(),carry=carryTodos();
+  return `<section class="card tr-card tr-start"><div class="tr-eyebrow">☀️ 오늘 시작 · ${md(p.today)}</div><h3>오늘 할 일을 쫙 적고 시작해요</h3>${p.goal?`<div class="tr-start-auto">🎯 의뢰서 <b>${p.goal}</b>건 <small>오늘 목표 · 자동으로 들어가요</small></div>`:""}${have.length?`<div class="tr-start-have"><small>이미 오늘로 잡힌 일</small>${have.map(t=>`<span class="tr-chip">${esc(t.title)}${t.estimateMin?` · ${fmtDur(t.estimateMin)}`:""}</span>`).join("")}</div>`:""}
+  <form data-form="day-start"><textarea name="todos" rows="4" data-todo-draft placeholder="한 줄에 하나씩 · 시간을 적으면 여유에서 빼요&#10;예) 팀장님 메일 회신 15분&#10;3시 회의 1시간">${esc(TR.drafts.todos||"")}</textarea><div class="tr-start-foot"><span class="tr-start-preview" data-todo-preview>${todoPreview(TR.drafts.todos)}</span>${carry.length?`<button type="button" class="tr-btn sm" data-act="todo-carry">↩ 지난번에 못 한 거 ${carry.length}개 가져오기</button>`:""}<button class="tr-btn primary" type="submit">시작하기</button></div></form></section>`;
+}
+function todoPreview(text){const l=parseTodos(text),m=l.reduce((a,x)=>a+(x.min||0),0);return l.length?`${l.length}개${m?` · ${fmtDur(m)}`:""}`:""}
+function todoCard(s,p){
+  const list=todayTodos(),done=list.filter(taskDone).length,left=todoMin(list),carry=carryTodos();
+  return `<section class="card tr-card tr-todo"><div class="tr-todo-head"><div><div class="tr-eyebrow">📝 오늘 할 일</div><h3><b class="tr-ok">${done}</b> / ${list.length}개${p.workday&&p.goal?` <small>· 🎯 의뢰서 ${p.doneTodayU.length}/${p.goal}건</small>`:""}</h3></div>${left?`<span class="tr-todo-min">남은 할 일 ${fmtDur(left)}</span>`:""}</div>
+  <div class="tr-todo-list">${list.map(t=>`<div class="tr-todo-row ${taskDone(t)?"done":""}" data-todo="${esc(t.id)}"><span class="tr-grip" title="끌어서 순서 바꾸기">⠿</span><button class="tr-todo-check ${taskDone(t)?"on":""}" data-todo-toggle="${esc(t.id)}" aria-label="${taskDone(t)?"완료 취소":"완료"}">✓</button><span class="tr-todo-title">${esc(t.emoji?t.emoji+" ":"")}${esc(t.title)}</span>${t.estimateMin?`<span class="tr-chip">${fmtDur(t.estimateMin)}</span>`:"<span></span>"}<button class="tr-todo-x" data-todo-drop="${esc(t.id)}" title="오늘에서 빼기" aria-label="오늘에서 빼기">×</button></div>`).join("")||`<p class="tr-sub">아직 없어요. 아래에 적어요.</p>`}</div>
+  <form class="tr-todo-add" data-form="todo-add"><input name="t" value="${esc(TR.drafts.t||"")}" placeholder="+ 할 일 추가 · 예) 샘플 체크 30분" autocomplete="off"><button class="tr-btn sm" type="submit">추가</button></form>${carry.length?`<button class="tr-link tr-todo-carry" data-act="todo-carry">↩ 지난번에 못 한 거 ${carry.length}개 가져오기</button>`:""}</section>`;
+}
 // 오늘 화면 카드: 그림 크게 (추천 순서 번호 · 아래쪽에 ⏱ 와 완료 버튼)
 function todayCard(it,p,s,n){
   const done=isDone(it),live=activeSession()?.item_id===it.id,g=it.group_id&&byId("groups",it.group_id);
@@ -907,7 +992,8 @@ function viewToday(s){
   const shown=TR.oneOnly?todoItems.slice(0,1):todoItems;
   const unconfirmed=itemsOf(s.id).filter(i=>i.auto_done!=null&&!i.confirmed).length;
   const zoom=`<span class="tr-zoom" role="group" aria-label="그림 크기"><button data-tzoom="-1" ${TR.tzoom<=1?"disabled":""} aria-label="작게" title="작게">−</button><button data-tzoom="1" ${TR.tzoom>=ZOOMS.length?"disabled":""} aria-label="크게" title="크게">＋</button></span>`;
-  return `${timerBar(s,p)}${goalBar(p)}${activeSession()?"":timeCard(s,p)}${heroCard(s,p)}
+  const started=s.settings?.day_start===p.today,showStart=!started&&p.workday;
+  return `${timerBar(s,p)}${showStart?startCard(s,p):""}${goalBar(p)}${!showStart&&(started||todayTodos().length)?todoCard(s,p):""}${activeSession()?"":timeCard(s,p)}${heroCard(s,p)}
   ${unconfirmed?`<button class="tr-notice" data-view="season">🤖 자동 추정 확인이 필요한 의뢰서 ${unconfirmed}건 →</button>`:""}
   <section class="section tr-today" data-zoom="${TR.tzoom}"><div class="section-title"><h3>${p.workday?"오늘 할 의뢰서":"다음에 할 의뢰서"}</h3><span class="tr-today-tools"><button class="tr-link" data-act="one-only">${TR.oneOnly?"전체 보기":"다음 하나만"}</button>${zoom}</span></div>${shown.length?`<div class="tr-grid tr-today-grid" style="--tr-card:${ZOOMS[TR.tzoom-1]||300}px">${shown.map((it,n)=>todayCard(it,p,s,n+1)).join("")}</div>`:`<div class="empty">${p.st.target?"남은 의뢰서가 없어요.":"아직 등록된 의뢰서가 없어요."}</div>`}${TR.oneOnly&&todoItems.length>1?`<div class="tr-more">+ ${todoItems.length-1}건은 숨겨 뒀어요</div>`:""}</section>
   <section class="section"><div class="section-title"><h3>오늘 완료 기록</h3><span>${p.doneToday.length}건</span></div>${p.doneToday.length?`<div class="tr-grid tr-today-grid tr-today-done">${[...p.doneToday].sort((a,b)=>(b.completed_at||"").localeCompare(a.completed_at||"")).map(it=>todayCard(it,p,s,0)).join("")}</div>`:`<div class="empty">아직 완료한 의뢰서가 없어요.</div>`}</section>`;
@@ -1014,6 +1100,8 @@ function openSheet(id){TR.detail=id;renderSheet();if(!sheet.open)sheet.showModal
 async function onClick(e){
   const b=e.target.closest("button,[data-open]");if(!b||!root.contains(b))return;
   const d=b.dataset;primeAlert(false);
+  if(d.todoToggle){await toggleTodo(d.todoToggle);return}
+  if(d.todoDrop){await dropTodo(d.todoDrop);return}
   if(d.pickmin){const f=b.closest("form");f.elements.min.value=d.pickmin;f.querySelectorAll("[data-pickmin]").forEach(x=>x.classList.toggle("on",x===b));return}
   if(d.view){TR.view=d.view;TR.selecting=false;TR.selected.clear();saveUI();if(sheet.open)sheet.close();render();main.scrollTo?.(0,0);return}
   if(d.ctab){TR.conceptTab=d.ctab;saveUI();render();return}
@@ -1048,6 +1136,7 @@ async function onClick(e){
     case"timer-stop":await stopTimer();break;
     case"timer-ext":await extendTimer();break;
     case"pick-close":pick.close();break;
+    case"todo-carry":await carryIn();break;
     case"skip":TR.skip++;render();break;
     case"one-only":TR.oneOnly=!TR.oneOnly;saveUI();render();break;
     case"pick":root.querySelector("#tr-file").click();break;
@@ -1072,6 +1161,8 @@ document.addEventListener("submit",async e=>{
   const f=e.target.closest?.("form[data-form]");if(!f||!root?.contains(f))return;
   e.preventDefault();
   const v=Object.fromEntries(new FormData(f)),s=season(),kind=f.dataset.form;
+  if(kind==="day-start"){const text=v.todos;TR.drafts.todos="";await startDay(text);return}
+  if(kind==="todo-add"){const items=parseTodos(v.t);if(!items.length)return;TR.drafts.t="";await addTodos(items);main.querySelector('[name="t"]')?.focus();return}
   if(kind==="timer"){const m=Math.round(Number(v.min));if(!(m>=1&&m<=600)){toast("1~600분 사이로 적어 주세요.");return}await startTimer(f.dataset.id,m);return}
   if(kind==="season-new"){
     const name=slug(v.name);if(!name)return;
