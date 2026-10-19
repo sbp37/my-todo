@@ -202,7 +202,7 @@ body.tr-on{overflow:hidden}
 .ck-c2.late,.ck-c3.late{fill:var(--danger)}
 .ck-c3{font-size:12px;font-weight:800;text-anchor:middle}
 .tr-agenda{list-style:none;margin:0;padding:0;display:grid;gap:4px;align-content:start}
-.tr-agenda li{display:grid;grid-template-columns:auto minmax(0,1fr) auto;gap:10px;align-items:center;padding:6px 10px;border-radius:var(--r-sm);background:#faf8f5;border-left:4px solid #d9d1c6;font-size:14px}
+.tr-agenda li{display:grid;grid-template-columns:18px auto minmax(0,1fr) auto;gap:10px;align-items:center;padding:6px 10px;border-radius:var(--r-sm);background:#faf8f5;border-left:4px solid #d9d1c6;font-size:14px}
 .tr-agenda li.req{border-left-color:var(--cc,#d9d1c6)}
 .tr-agenda li.todo{border-left-color:#a796d8}
 .tr-agenda li.cur{background:#fff;box-shadow:0 0 0 2px var(--ink) inset;font-weight:700}
@@ -225,6 +225,9 @@ body.tr-on{overflow:hidden}
 .ag-label{font-weight:700;font-size:15px}
 .ag-sub{font-size:12px;font-weight:600;color:var(--muted);overflow-wrap:anywhere}
 .ag-ctl{display:flex;align-items:center;gap:8px}
+.ag-grip{cursor:grab;font-size:20px;color:var(--muted);touch-action:none;text-align:center;padding:8px 0}
+.ag-grip.off{cursor:default}
+.tr-agenda li.tr-ghost{opacity:.5}
 .tr-agenda li.next{background:#fff;box-shadow:0 0 0 2px var(--tr) inset}
 .tr-agenda li.unp{background:#fffcf3;border-left-style:dashed}
 .tr-agenda li.unp time{color:var(--tr);font-size:12px}
@@ -418,9 +421,9 @@ body.tr-on{overflow:hidden}
 .tr-toast.on{opacity:1;transform:translate(-50%,0)}
 
 @media(max-width:680px){
-  .tr-agenda li{grid-template-columns:88px minmax(0,1fr);row-gap:6px}
+  .tr-agenda li{grid-template-columns:18px 88px minmax(0,1fr);row-gap:6px;gap:8px}
   .ag-thumb,.ag-icon{width:88px}
-  .ag-ctl{grid-column:2;justify-content:flex-end}
+  .ag-ctl{grid-column:3;justify-content:flex-end}
   .tr-agenda .ag-label{overflow-wrap:normal;word-break:keep-all}
   .tr-stopwatch:has(.tr-sw-todo){grid-template-columns:64px minmax(0,1fr)}
   .tr-clockwrap{grid-template-columns:1fr;gap:12px}

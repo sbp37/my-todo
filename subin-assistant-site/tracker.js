@@ -111,12 +111,27 @@ function fixedAt(title){
   if(m[1]==="오후"&&h<12)h+=12;else if(!m[1]&&h>=1&&h<=7)h+=12;
   return h*60+mi;
 }
-// 하루 순서: 할 일 목록 순서 + 그 사이 "🎯 의뢰서" 한 줄 (자리는 시즌 settings.day_req={date,prio}, 없으면 맨 뒤)
-function dayOrder(s,p){
-  const list=todayTodos(),dr=s?.settings?.day_req,rp=dr&&dr.date===p.today&&Number.isFinite(Number(dr.prio))?Number(dr.prio):Infinity,showReq=p.workday&&p.goal>0,out=[];let placed=false;
-  for(const t of list){if(showReq&&!placed&&t.priority>rp){out.push({kind:"req"});placed=true}out.push({kind:"task",t})}
-  if(showReq&&!placed)out.push({kind:"req"});
+// 하루 순서: 시즌 settings.day_seq={date,keys:["t:할일id","u:작업키",...]} (시간표 목록·할 일 목록에서 끌어서 정함).
+// 없으면 할 일 목록 순서 + 🎯 의뢰서 자리(옛 day_req, 없으면 맨 뒤)에 오늘 의뢰서들을 추천 순서로
+const seqOf=s=>{const q=s?.settings?.day_seq;return q&&q.date===todayISO()&&Array.isArray(q.keys)?q.keys:null};
+function dayEntries(s,p){
+  const tasks=todayTodos(),units=(p.workday&&p.goal>0?p.todoU:[]).map(u=>({kind:"unit",u,k:"u:"+u.key})),seq=seqOf(s);
+  if(seq){
+    const ix=new Map(seq.map((k,i)=>[k,i]));
+    // 순서에 없는 것(새로 적은 할 일 등)은 맨 뒤
+    return [...tasks.map(t=>({kind:"task",t,k:"t:"+t.id})),...units].map((e,n)=>({...e,o:ix.has(e.k)?ix.get(e.k):1e6+n})).sort((a,b)=>a.o-b.o);
+  }
+  const dr=s?.settings?.day_req,rp=dr&&dr.date===p.today&&Number.isFinite(Number(dr.prio))?Number(dr.prio):Infinity,out=[];let placed=false;
+  for(const t of tasks){if(!placed&&t.priority>rp){out.push(...units);placed=true}out.push({kind:"task",t,k:"t:"+t.id})}
+  if(!placed)out.push(...units);
   return out;
+}
+async function saveSeq(keys){
+  const s=season();if(!s)return;
+  // 할 일 priority도 같은 순서로 (비서 화면 순서와 맞춤)
+  const changed=[];let n=0;for(const k of keys)if(k.startsWith("t:")){const t=TASKS.tasks.find(x=>x.id===k.slice(2));if(t){n++;if(t.priority!==n){t.priority=n;changed.push(t)}}}
+  await put({seasons:[{...s,settings:{...(s.settings||{}),day_seq:{date:todayISO(),keys}}}]});
+  if(changed.length)await taskPatch(changed,x=>({action:"update_task",external_id:x.id,patch:{priority:x.priority}}));
 }
 async function addTodos(items){
   if(!items.length||!guardOnline())return;
@@ -145,14 +160,11 @@ async function carryIn(){
   list.forEach(t=>t.due=d);render();
   if(await taskPatch(list,x=>({action:"update_task",external_id:x.id,patch:{due_date:d}})))toast(`못 한 ${list.length}개를 오늘로 가져왔어요`);
 }
-// 업무·개인이 섞여 있어도 보이는 순서 그대로 (바뀐 것만 priority 저장). 🎯 의뢰서 줄은 앞 할 일 수 + 0.5
+// 할 일 목록에서 끈 순서: 🎯 의뢰서 줄 자리에 오늘 의뢰서들을 지금 순서대로
 async function reorderTodos(ids){
-  const s=season(),changed=[];let n=0,reqPrio=null;
-  ids.forEach(id=>{if(id==="__req__"){reqPrio=n+.5;return}const t=TASKS.tasks.find(x=>x.id===id);if(!t)return;n++;if(t.priority!==n){t.priority=n;changed.push(t)}});
-  const cur=s?.settings?.day_req;
-  if(s&&reqPrio!=null&&!(cur?.date===todayISO()&&cur.prio===reqPrio))await put({seasons:[{...s,settings:{...(s.settings||{}),day_req:{date:todayISO(),prio:reqPrio}}}]});
-  else render();
-  await taskPatch(changed,x=>({action:"update_task",external_id:x.id,patch:{priority:x.priority}}));
+  const s=season(),p=s&&todayPlan(s);if(!p)return;
+  const units=dayEntries(s,p).filter(e=>e.kind==="unit").map(e=>e.k);
+  await saveSeq(ids.flatMap(id=>id==="__req__"?units:["t:"+id]));
 }
 async function startDay(text){
   const s=season(),items=parseTodos(text);
@@ -323,7 +335,8 @@ function todayPlan(s){
   if(restU.length>needRest)restU=restU.slice(0,needRest);
   let todoU=[...pinnedU,...restU];
   const rank=new Map(orderU.map((u,n)=>[u.key,n]));
-  todoU.sort((a,b)=>(rank.get(a.key)??999)-(rank.get(b.key)??999));
+  const seq=seqOf(s),six=seq?new Map(seq.map((k,i)=>[k,i])):null;
+  todoU.sort((a,b)=>(six?(six.get("u:"+a.key)??1e6)-(six.get("u:"+b.key)??1e6):0)||(rank.get(a.key)??999)-(rank.get(b.key)??999));
   const todo=todoU.flatMap(u=>u.items.filter(i=>!isDone(i)).sort(galleryCmp).map(i=>i.id));
   const next=workday?todo:order.map(i=>i.id);
   let nextWorkday="";for(let d=D.add(today,1),g=0;g<30;g++,d=D.add(d,1))if(isWorkday(s,d)){nextWorkday=d;break}
@@ -930,11 +943,16 @@ function render(){
   updateTimers();
   if(TR.detail&&sheet.open)renderSheet();
 }
-let todoSort=null;
+let todoSort=null,agSort=null;
 function bindTodoSort(){
-  todoSort?.destroy();todoSort=null;
-  const el=main.querySelector(".tr-todo-list");if(!el||el.children.length<2)return;
-  loadSortable().then(S=>{if(!el.isConnected)return;todoSort=new S(el,{handle:".tr-grip",animation:150,forceFallback:true,fallbackOnBody:true,ghostClass:"tr-ghost",onStart:()=>{TR.dragging=true},onEnd:e=>{TR.dragging=false;if(e.oldIndex===e.newIndex){render();return}reorderTodos([...el.querySelectorAll("[data-todo]")].map(x=>x.dataset.todo))}})}).catch(()=>{});
+  todoSort?.destroy();todoSort=null;agSort?.destroy();agSort=null;
+  const el=main.querySelector(".tr-todo-list"),ag=main.querySelector(".tr-agenda");
+  const opt={animation:150,forceFallback:true,fallbackOnBody:true,ghostClass:"tr-ghost",onStart:()=>{TR.dragging=true}};
+  loadSortable().then(S=>{
+    if(el?.isConnected&&el.children.length>1)todoSort=new S(el,{...opt,handle:".tr-grip",onEnd:e=>{TR.dragging=false;if(e.oldIndex===e.newIndex){render();return}reorderTodos([...el.querySelectorAll("[data-todo]")].map(x=>x.dataset.todo))}});
+    // 시간표 옆 목록: 지금 재는 칸은 맨 위에 고정
+    if(ag?.isConnected&&ag.children.length>1)agSort=new S(ag,{...opt,handle:".ag-grip",filter:".cur",preventOnFilter:false,onMove:e=>!e.related.classList.contains("cur"),onEnd:e=>{TR.dragging=false;if(e.oldIndex===e.newIndex){render();return}saveSeq([...ag.children].map(x=>x.dataset.key).filter(Boolean))}});
+  }).catch(()=>{});
 }
 function seasonSetup(){
   return `<section class="card tr-card"><h3>시즌부터 만들어요</h3><p class="tr-sub">마감일과 검수 여유일로 하루 필요량을 계산해요.</p><form class="tr-form" data-form="season-new"><label>시즌<input name="name" value="27SS" required></label><label>마감일<input type="date" name="deadline" value="2026-11-03" required></label><label>검수 여유일 <small>영업일</small><input type="number" name="review_days" min="0" max="10" value="1"></label><button class="tr-btn primary" type="submit">시즌 만들기</button></form></section>`;
@@ -967,9 +985,9 @@ function daySchedule(s,p){
   // 남은 것: 하루 순서대로, 내가 정한 시간만큼. 시간 안 정한 건 미정 목록으로
   const run=runInfo(),runU=run?.kind==="req"&&dayOf(run.start)===today?p.todoU.find(u=>u.items.some(i=>i.id===run.id)):null,runT=run?.kind==="todo"?run.id:null;
   const pend=[],unplanned=[];
-  for(const o of dayOrder(s,p)){
-    if(o.kind==="req")p.todoU.filter(u=>u!==runU).forEach(u=>{const f=u.items.find(i=>!isDone(i))||u.items[0],x={kind:"req",key:u.key,id:f.id,dur:unitPlan(s,u),label:u.group?u.group.name:f.code,num:num.get(f.id),cid:f.concept_id};(x.dur?pend:unplanned).push(x)});
-    else if(!taskDone(o.t)&&o.t.id!==runT){const d=Number(o.t.estimateMin)||null,fx=fixedAt(o.t.title),x={kind:"todo",id:o.t.id,dur:d,label:o.t.title,fixed:d&&fx!=null&&fx+d>now?fx:null};(d?pend:unplanned).push(x)}
+  for(const e of dayEntries(s,p)){
+    if(e.kind==="unit"){const u=e.u;if(u===runU)continue;const f=u.items.find(i=>!isDone(i))||u.items[0],x={kind:"req",k:e.k,key:u.key,id:f.id,dur:unitPlan(s,u),label:u.group?u.group.name:f.code,num:num.get(f.id),cid:f.concept_id};(x.dur?pend:unplanned).push(x)}
+    else if(!taskDone(e.t)&&e.t.id!==runT){const t=e.t,d=Number(t.estimateMin)||null,fx=fixedAt(t.title),x={kind:"todo",k:e.k,id:t.id,dur:d,label:t.title,fixed:d&&fx!=null&&fx+d>now?fx:null};(d?pend:unplanned).push(x)}
   }
   const fixed=pend.filter(x=>x.fixed!=null).map(x=>({...x,a:x.fixed,b:x.fixed+x.dur}));
   const busy=mergeIv([...c.breaks.map(x=>[...x]),...fixed.map(x=>[x.a,x.b])]);
@@ -977,7 +995,7 @@ function daySchedule(s,p){
   // 지금 재는 것: 시작한 때부터 정한 시간, 넘기면 지금까지 늘어나고 뒤가 밀린다
   if(run&&(runU||runT)){
     const a=seoulMin(run.start),planned=run.goal?addBusy(a,run.goal,busy):now,b=Math.max(planned,now);
-    blocks.push({kind:run.kind,id:run.id,key:runU?.key,label:runU?.group?runU.group.name:run.label,num:runU?num.get(run.id):null,cid:run.item?.concept_id,dur:run.goal||null,a,b,cur:true,over:run.goal&&now>planned?now-planned:0});
+    blocks.push({kind:run.kind,k:runU?"u:"+runU.key:"t:"+run.id,id:run.id,key:runU?.key,label:runU?.group?runU.group.name:run.label,num:runU?num.get(run.id):null,cid:run.item?.concept_id,dur:run.goal||null,a,b,cur:true,over:run.goal&&now>planned?now-planned:0});
     cur=outBusy(Math.max(cur,b),busy);
   }
   for(const x of pend.filter(x=>x.fixed==null)){const a=cur,b=addBusy(a,x.dur,busy);blocks.push({...x,a,b});cur=outBusy(b,busy)}
@@ -1027,10 +1045,10 @@ function agendaList(sch){
     const it=x.kind==="req"?byId("items",x.id):null,g=it?.group_id&&byId("groups",it.group_id),ss=season();
     const pic=it?`<button class="ag-thumb" data-open="${esc(it.id)}" title="크게 보기">${thumbHTML(it)}${x.num?`<span class="ag-num">${x.num}</span>`:""}</button>`:`<span class="ag-icon" aria-hidden="true">${x.fixed!=null?"📌":"📝"}</span>`;
     const sub=it?[conceptName(it.concept_id),it.item_type?typeName(ss,it.item_type)||it.item_type:"",g?`🔗 ${g.name} ${itemsOf(it.season_id).filter(i=>i.group_id===g.id&&!isDone(i)).length}건`:""].filter(Boolean).join(" · "):"";
-    return `<li class="${x.cur?"cur":""} ${x===nextUp?"next":""} ${x.unp?"unp":""} ${!x.unp&&x.b>sch.c.e?"late":""} ${x.kind}"${x.kind==="req"?` style="${cvars(x.cid)}"`:""}>${pic}<div class="ag-main"><time>${x.unp?"시간 미정":`${clock(Math.round(x.a))}–${clock(Math.round(x.b))}`}</time><span class="ag-label">${x.cur?`<em>지금</em>`:x===nextUp?`<em class="nx">다음</em>`:""}${esc(it?it.code:x.label)}${x.cur?(x.over?` <small class="tr-em">· +${fmtDur(x.over)} 넘김</small>`:x.dur?` <small>· 남은 ${fmtDur(x.b-sch.now)}</small>`:""):""}</span>${sub?`<small class="ag-sub">${esc(sub)}</small>`:""}</div><div class="ag-ctl"><label class="ag-dur" title="이 칸에 쓸 시간"><input type="number" min="1" max="600" inputmode="numeric" name="${name}" data-dur="${x.cur?"run":x.kind}" data-did="${esc(x.kind==="req"?x.key:x.id)}" value="${esc(String(val))}" placeholder="?">분</label>${btn}</div></li>`;
+    return `<li class="${x.cur?"cur":""} ${x===nextUp?"next":""} ${x.unp?"unp":""} ${!x.unp&&x.b>sch.c.e?"late":""} ${x.kind}" data-key="${esc(x.k||"")}"${x.kind==="req"?` style="${cvars(x.cid)}"`:""}>${x.cur?`<span class="ag-grip off"></span>`:`<span class="tr-grip ag-grip" title="끌어서 순서 바꾸기">⠿</span>`}${pic}<div class="ag-main"><time>${x.unp?"시간 미정":`${clock(Math.round(x.a))}–${clock(Math.round(x.b))}`}</time><span class="ag-label">${x.cur?`<em>지금</em>`:x===nextUp?`<em class="nx">다음</em>`:""}${esc(it?it.code:x.label)}${x.cur?(x.over?` <small class="tr-em">· +${fmtDur(x.over)} 넘김</small>`:x.dur?` <small>· 남은 ${fmtDur(x.b-sch.now)}</small>`:""):""}</span>${sub?`<small class="ag-sub">${esc(sub)}</small>`:""}</div><div class="ag-ctl"><label class="ag-dur" title="이 칸에 쓸 시간"><input type="number" min="1" max="600" inputmode="numeric" name="${name}" data-dur="${x.cur?"run":x.kind}" data-did="${esc(x.kind==="req"?x.key:x.id)}" value="${esc(String(val))}" placeholder="?">분</label>${btn}</div></li>`;
   };
   const n=sch.unplanned.length;
-  return `<div class="tr-agenda-wrap"><ol class="tr-agenda">${rows.map(row).join("")}</ol>${n>1?`<form class="tr-fill" data-form="fill-dur"><span>⏳ 시간 미정 <b>${n}</b>개</span><input type="number" name="fillmin" min="1" max="600" inputmode="numeric" placeholder="분" value="${esc(TR.drafts.fillmin||"")}">분씩<button class="tr-btn sm" type="submit">모두 넣기</button></form>`:""}<p class="tr-agenda-tip">칸마다 분을 적으면 시간표가 바로 바뀌어요 · ▶ 시작하면 그때부터 재고, 넘기면 뒤 일정이 밀려요</p></div>`;
+  return `<div class="tr-agenda-wrap"><ol class="tr-agenda">${rows.map(row).join("")}</ol>${n>1?`<form class="tr-fill" data-form="fill-dur"><span>⏳ 시간 미정 <b>${n}</b>개</span><input type="number" name="fillmin" min="1" max="600" inputmode="numeric" placeholder="분" value="${esc(TR.drafts.fillmin||"")}">분씩<button class="tr-btn sm" type="submit">모두 넣기</button></form>`:""}<p class="tr-agenda-tip">⠿ 끌어서 순서를 바꿔요 · 칸마다 분을 적으면 시간표가 바로 바뀌어요 · ▶ 시작하면 그때부터 재고, 넘기면 뒤 일정이 밀려요</p></div>`;
 }
 // 오늘 여유: 퇴근(야근 끝)까지 남은 근무 시간 − 남은 건수 × 보통 몇 분 (타이머에서 고른 시간 평균) + 타임라인
 function timeCard(s,p){
@@ -1113,7 +1131,7 @@ function todoPreview(text){const l=parseTodos(text),m=l.reduce((a,x)=>a+(x.min||
 function todoCard(s,p){
   const list=todayTodos(),done=list.filter(taskDone).length,left=todoMin(list),carry=carryTodos();
   return `<section class="card tr-card tr-todo"><div class="tr-todo-head"><div><div class="tr-eyebrow">📝 오늘 할 일</div><h3><b class="tr-ok">${done}</b> / ${list.length}개${p.workday&&p.goal?` <small>· 🎯 의뢰서 ${p.doneTodayU.length}/${p.goal}건</small>`:""}</h3></div>${left?`<span class="tr-todo-min">남은 할 일 ${fmtDur(left)}</span>`:""}</div>
-  <div class="tr-todo-list">${dayOrder(s,p).map(o=>{
+  <div class="tr-todo-list">${(()=>{const es=dayEntries(s,p),out=[];let req=false;for(const e of es){if(e.kind==="unit"){if(!req){out.push({kind:"req"});req=true}}else out.push(e)}if(!req&&p.workday&&p.goal>0)out.push({kind:"req"});return out})().map(o=>{
     if(o.kind==="req"){const left=Math.max(0,p.goal-p.doneTodayU.length);return `<div class="tr-todo-row req" data-todo="__req__"><span class="tr-grip" title="끌어서 하루 순서 바꾸기">⠿</span><span class="tr-todo-check req" aria-hidden="true">🎯</span><span class="tr-todo-title">의뢰서 <b>${p.doneTodayU.length}/${p.goal}</b>건</span><span class="tr-chip">${left?(()=>{const pl=p.todoU.map(u=>unitPlan(s,u)),set=pl.filter(Boolean);return set.length?`${fmtDur(set.reduce((a,x)=>a+x,0))}${set.length<pl.length?` · 미정 ${pl.length-set.length}`:""}`:"시간 미정"})():"✓ 오늘 몫 끝"}</span><span></span></div>`}
     const t=o.t,fx=fixedAt(t.title);
     return `<div class="tr-todo-row ${taskDone(t)?"done":""}" data-todo="${esc(t.id)}"><span class="tr-grip" title="끌어서 순서 바꾸기">⠿</span><button class="tr-todo-check ${taskDone(t)?"on":""}" data-todo-toggle="${esc(t.id)}" aria-label="${taskDone(t)?"완료 취소":"완료"}">✓</button><span class="tr-todo-title">${esc(t.emoji?t.emoji+" ":"")}${esc(t.title)}</span><span class="tr-chips">${fx!=null?`<span class="tr-chip fixed">📌 ${clock(fx)}</span>`:""}${t.estimateMin?`<span class="tr-chip">${fmtDur(t.estimateMin)}</span>`:""}</span><button class="tr-todo-x" data-todo-drop="${esc(t.id)}" title="오늘에서 빼기" aria-label="오늘에서 빼기">×</button></div>`;
