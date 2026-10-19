@@ -98,10 +98,26 @@ function parseTodo(line){
 }
 const parseTodos=text=>String(text||"").split(/\n+/).map(parseTodo).filter(Boolean);
 const taskDone=t=>t.status==="done";
-function todayTodos(){const d=todayISO();return (TASKS?.tasks||[]).filter(t=>t.due===d&&t.status!=="later").sort((a,b)=>taskDone(a)-taskDone(b)||(a.priority-b.priority)||(a.createdAt||"").localeCompare(b.createdAt||""))}
+function todayTodos(){const d=todayISO();return (TASKS?.tasks||[]).filter(t=>t.due===d&&t.status!=="later").sort((a,b)=>(a.priority-b.priority)||(a.createdAt||"").localeCompare(b.createdAt||""))}
+const todoDur=t=>Number(t.estimateMin)||15;
 // 지난 2주 안에 트래커에서 적었는데 못 한 것
 function carryTodos(){const d=todayISO(),from=D.add(d,-14);return (TASKS?.tasks||[]).filter(t=>String(t.id).startsWith("trk-")&&!taskDone(t)&&t.status!=="later"&&t.due&&t.due<d&&t.due>=from)}
-const todoMin=list=>list.filter(t=>!taskDone(t)).reduce((a,t)=>a+(Number(t.estimateMin)||0),0);
+const todoMin=list=>list.filter(t=>!taskDone(t)).reduce((a,t)=>a+todoDur(t),0);
+// 제목에 적은 시각: "3시 회의"·"오후 2시 반"·"15:30 미팅" → 분. 1~7시는 오후로 ("1시간"은 시간이라 제외)
+function fixedAt(title){
+  const m=/(오전|오후)?\s*(\d{1,2})\s*(?:시\s*(?:(\d{1,2})\s*분|(반))?(?:(?![가-힣])|(?=에|부터|까지))|:(\d{2}))/.exec(title||"");if(!m)return null;
+  let h=Number(m[2]);const mi=m[3]?Number(m[3]):m[4]?30:m[5]?Number(m[5]):0;
+  if(h>24||mi>59)return null;
+  if(m[1]==="오후"&&h<12)h+=12;else if(!m[1]&&h>=1&&h<=7)h+=12;
+  return h*60+mi;
+}
+// 하루 순서: 할 일 목록 순서 + 그 사이 "🎯 의뢰서" 한 줄 (자리는 시즌 settings.day_req={date,prio}, 없으면 맨 뒤)
+function dayOrder(s,p){
+  const list=todayTodos(),dr=s?.settings?.day_req,rp=dr&&dr.date===p.today&&Number.isFinite(Number(dr.prio))?Number(dr.prio):Infinity,showReq=p.workday&&p.goal>0,out=[];let placed=false;
+  for(const t of list){if(showReq&&!placed&&t.priority>rp){out.push({kind:"req"});placed=true}out.push({kind:"task",t})}
+  if(showReq&&!placed)out.push({kind:"req"});
+  return out;
+}
 async function addTodos(items){
   if(!items.length||!guardOnline())return;
   const d=todayISO(),list=todayTodos(),base=list.length?Math.max(...list.map(t=>t.priority||0)):0;
@@ -128,9 +144,13 @@ async function carryIn(){
   list.forEach(t=>t.due=d);render();
   if(await taskPatch(list,x=>({action:"update_task",external_id:x.id,patch:{due_date:d}})))toast(`못 한 ${list.length}개를 오늘로 가져왔어요`);
 }
-// 업무·개인이 섞여 있어도 보이는 순서 그대로 (바뀐 것만 priority 저장)
+// 업무·개인이 섞여 있어도 보이는 순서 그대로 (바뀐 것만 priority 저장). 🎯 의뢰서 줄은 앞 할 일 수 + 0.5
 async function reorderTodos(ids){
-  const changed=[];ids.forEach((id,n)=>{const t=TASKS.tasks.find(x=>x.id===id);if(t&&t.priority!==n+1){t.priority=n+1;changed.push(t)}});render();
+  const s=season(),changed=[];let n=0,reqPrio=null;
+  ids.forEach(id=>{if(id==="__req__"){reqPrio=n+.5;return}const t=TASKS.tasks.find(x=>x.id===id);if(!t)return;n++;if(t.priority!==n){t.priority=n;changed.push(t)}});
+  const cur=s?.settings?.day_req;
+  if(s&&reqPrio!=null&&!(cur?.date===todayISO()&&cur.prio===reqPrio))await put({seasons:[{...s,settings:{...(s.settings||{}),day_req:{date:todayISO(),prio:reqPrio}}}]});
+  else render();
   await taskPatch(changed,x=>({action:"update_task",external_id:x.id,patch:{priority:x.priority}}));
 }
 async function startDay(text){
@@ -886,40 +906,100 @@ function goalBar(p){
   const tomorrow=!st.leftTomorrow?`<span class="tr-goal-tomorrow">⚠️ 오늘이 마지막 제작일이에요</span>`:met?`<span class="tr-goal-tomorrow ok">오늘 목표 채웠어요 → 내일 목표 <b>${p.tomorrowIfStop}</b>건</span>`:`<span class="tr-goal-tomorrow">오늘 더 못 하면 → 내일 목표 <b class="tr-em">${p.tomorrowIfStop}</b>건 · 오늘 목표 채우면 → <b>${p.tomorrowIfGoal}</b>건</span>`;
   return `<section class="card tr-card tr-goal"><div class="tr-goal-head"><div><div class="tr-eyebrow">오늘 목표</div><h3><b>${done}</b> / ${p.goal}건${p.goalFiles!==p.goal?` <small class="tr-goal-files">파일 ${files} / ${p.goalFiles}개</small>`:""}</h3></div></div><div class="tr-bar"><i style="width:${pct}%"></i></div><p class="tr-goal-info">${st.overdue?"⚠️ 제작 마감이 지났어요. 남은 걸 오늘 몫으로 잡았어요.":`제작 마감 ${md(st.end)}까지 <b>${st.left}</b>일 · ${left}`}${met?" · 🎉 오늘 목표 달성!":""}${tomorrow}${p.carry?`<span class="tr-goal-note">지난 작업일에 밀린 ${p.carry}건은 한꺼번에 얹지 않고 남은 날에 나눠 담았어요</span>`:""}${st.bundles?`<span class="tr-goal-note">묶음은 1건으로 세요 · 묶음 안 의뢰서가 다 끝나야 완료</span>`:""}</p></section>`;
 }
+/* ---------- 원형 시간표: 끝낸 것 → 지금 칸 → 하루 순서대로 남은 칸 (시각 적은 일은 그 자리에 고정) ---------- */
+function mergeIv(list){const v=list.filter(([a,b])=>b>a).sort((x,y)=>x[0]-y[0]),out=[];for(const [a,b] of v){const l=out[out.length-1];if(l&&a<=l[1])l[1]=Math.max(l[1],b);else out.push([a,b])}return out}
+// t부터 mins분 일한 시각 (busy 구간은 건너뜀, 퇴근 뒤로도 이어짐)
+function addBusy(t,mins,busy){let x=t;for(const [b0,b1] of busy){if(x>=b1)continue;if(x>=b0){x=b1;continue}const room=b0-x;if(mins<=room)return x+mins;mins-=room;x=b1}return x+mins}
+const outBusy=(t,busy)=>{for(const [b0,b1] of busy)if(t>=b0&&t<b1)t=b1;return t};
+const splitBusy=(a,b,busy)=>{let out=[[a,b]];for(const [b0,b1] of busy)out=out.flatMap(([x,y])=>y<=b0||x>=b1?[[x,y]]:[[x,Math.min(y,b0)],[Math.max(x,b1),y]]);return out.filter(([x,y])=>y-x>.01)};
+function daySchedule(s,p){
+  const c=workCfg(s),now=seoulMin(),typ=typicalMin(s),today=p.today,todos=todayTodos();
+  const num=new Map();p.todo.forEach((id,n)=>num.set(id,n+1));
+  // 지난 것: 오늘 끝낸 의뢰서(작업 단위)·할 일을 끝낸 순서대로, 바로 앞에 끝낸 때부터
+  const ev=[...p.doneTodayU.map(u=>({kind:"req",at:seoulMin(u.completedAt),label:u.group?u.group.name:u.items[0].code,cid:u.items[0].concept_id})),...todos.filter(t=>taskDone(t)&&t.completedAt&&dayOf(t.completedAt)===today).map(t=>({kind:"todo",at:seoulMin(t.completedAt),label:t.title}))].sort((a,b)=>a.at-b.at);
+  const past=[];let last=c.s;
+  for(const e of ev){const end=Math.max(c.s,e.at);past.push({...e,a:Math.min(last,end),b:end,done:true});last=Math.max(last,end)}
+  // 남은 것: 하루 순서대로 (의뢰서 줄 = 오늘 남은 작업들, 추천 순서)
+  const act=activeSession(),actU=act&&dayOf(act.started_at)===today&&p.todoU.find(u=>u.items.some(i=>i.id===act.item_id));
+  const pend=[];
+  for(const o of dayOrder(s,p)){
+    if(o.kind==="req")p.todoU.filter(u=>u!==actU).forEach(u=>{const f=u.items.find(i=>!isDone(i))||u.items[0];pend.push({kind:"req",dur:typ,label:u.group?u.group.name:f.code,num:num.get(f.id),cid:f.concept_id})});
+    else if(!taskDone(o.t)){const fx=fixedAt(o.t.title),d=todoDur(o.t);pend.push({kind:"todo",dur:d,label:o.t.title,fixed:fx!=null&&fx+d>now?fx:null})}
+  }
+  const fixed=pend.filter(x=>x.fixed!=null).map(x=>({...x,a:x.fixed,b:x.fixed+x.dur}));
+  const busy=mergeIv([...c.breaks.map(x=>[...x]),...fixed.map(x=>[x.a,x.b])]);
+  const flow=pend.filter(x=>x.fixed==null);
+  // 타이머가 켜져 있으면 그 의뢰서가 지금 칸 (타이머 시작부터 목표 시간)
+  if(actU){const f=byId("items",act.item_id);flow.unshift({kind:"req",dur:timerGoal(act)||typ,label:f.code,num:num.get(f.id),cid:f.concept_id,timer:true,start:seoulMin(act.started_at)})}
+  const blocks=[];let cur=outBusy(Math.max(c.s,last),busy);
+  flow.forEach((x,i)=>{
+    let a=i===0&&x.timer?x.start:cur,b=addBusy(a,x.dur,busy),over=0;
+    // 지금 칸이 정한 시간을 넘겼으면 지금까지 늘리고 뒤를 민다
+    if(i===0&&now>=c.s&&b<now){over=now-b;b=now}
+    blocks.push({...x,a,b,cur:i===0&&now>=c.s&&a<=now,over});cur=outBusy(b,busy);
+  });
+  const all=[...blocks,...fixed].sort((x,y)=>x.a-y.a);
+  const finish=all.length?Math.max(...all.map(x=>x.b)):null;
+  return {c,now,typ,past,blocks:all,busy,finish,late:finish!=null?finish-c.e:null,slack:finish!=null&&finish<=c.e?workBetween(Math.max(finish,now),c.e,c):null};
+}
+function clockSVG(sch,s,showPlan){
+  const {c,now}=sch,C=150,cut=c.s+720,ang=m=>((m/60)%12)/12*Math.PI*2,pt=(m,r)=>[+(C+r*Math.sin(ang(m))).toFixed(2),+(C-r*Math.cos(ang(m))).toFixed(2)];
+  const ring=m=>m<cut?[128,90]:[86,64];
+  const arc=(a,b,r1,r0)=>{if(b-a<.2)return"";if(b-a>=719.9)b=a+719.9;const L=b-a>360?1:0,[x1,y1]=pt(a,r1),[x2,y2]=pt(b,r1),[x3,y3]=pt(b,r0),[x4,y4]=pt(a,r0);return `M${x1} ${y1}A${r1} ${r1} 0 ${L} 1 ${x2} ${y2}L${x3} ${y3}A${r0} ${r0} 0 ${L} 0 ${x4} ${y4}Z`};
+  const slice=(a,b,cls,style="",title="")=>(b<=cut||a>=cut?[[a,b]]:[[a,cut],[cut,b]]).map(([x,y])=>{const [r1,r0]=ring(x);const d=arc(x,y,r1,r0);return d?`<path d="${d}" class="${cls}" ${style?`style="${style}"`:""}>${title?`<title>${esc(title)}</title>`:""}</path>`:""}).join("");
+  const label=(a,b,txt)=>{if(b-a<24||!txt)return"";const m=(a+b)/2,[r1,r0]=ring(m),[x,y]=pt(m,(r1+r0)/2);return `<text x="${x}" y="${y}" class="ck-label">${esc(txt)}</text>`};
+  const short=t=>{const w=[...String(t)];return w.length>4?w.slice(0,4).join(""):w.join("")};
+  const col=cid=>{const [,base,bg]=conceptColor(cid);return `fill:${bg};stroke:${base}`};
+  let g=slice(c.s,c.e,"ck-work");
+  c.breaks.forEach(([a,b])=>g+=slice(a,b,"ck-break"));
+  sch.past.forEach(x=>{g+=slice(x.a,x.b,x.kind==="req"?"ck-done":"ck-done todo","",`${clock(x.b)} 완료 · ${x.label}`)+label(x.a,x.b,x.kind==="req"?"✓":short(x.label))});
+  if(showPlan)sch.blocks.forEach(x=>{
+    const segs=x.fixed!=null?[[x.a,x.b]]:splitBusy(x.a,x.b,sch.busy),cls=`ck-${x.kind}${x.fixed!=null?" fixed":""}${x.cur?" cur":""}`,title=`${clock(x.a)}–${clock(x.b)} · ${x.kind==="req"?"의뢰서 ":""}${x.label}`;
+    segs.forEach(([a,b])=>{
+      const sty=x.kind==="req"?col(x.cid):"";
+      if(b<=c.e)g+=slice(a,b,cls,sty,title);else if(a>=c.e)g+=slice(a,b,cls+" ck-late","",title+" · 퇴근 뒤");else g+=slice(a,c.e,cls,sty,title)+slice(c.e,b,cls+" ck-late","",title+" · 퇴근 뒤");
+    });
+    const big=segs.reduce((m,y)=>y[1]-y[0]>m[1]-m[0]?y:m,[0,0]);g+=label(big[0],big[1],x.kind==="req"?(x.num?String(x.num):"🎯"):short(x.label));
+  });
+  // 눈금·숫자
+  let face="";for(let h=1;h<=12;h++){const m=h*60,[x1,y1]=pt(m,131),[x2,y2]=pt(m,137),[tx,ty]=pt(m,145);face+=`<line x1="${x1}" y1="${y1}" x2="${x2}" y2="${y2}" class="ck-tick"/><text x="${tx}" y="${ty}" class="ck-num">${h}</text>`}
+  // 퇴근선 (야근이면 정규 퇴근은 점선)
+  const mark=(m,cls)=>{const [r1]=ring(Math.min(m,cut-.1)),[x1,y1]=pt(m,r1+4),[x2,y2]=pt(m,ring(m)[1]-4);return `<line x1="${x1}" y1="${y1}" x2="${x2}" y2="${y2}" class="${cls}"/>`};
+  let marks=mark(c.e,"ck-end");if(c.ot)marks+=mark(c.end0,"ck-end dashed");
+  // 지금 바늘: 가운데 글씨를 가리지 않게 링 위에만
+  const inner=c.e>cut?60:86,[h1x,h1y]=pt(now,inner-2),[hx,hy]=pt(now,140),hand=`<line x1="${h1x}" y1="${h1y}" x2="${hx}" y2="${hy}" class="ck-hand"/><circle cx="${hx}" cy="${hy}" r="4.5" class="ck-hub"/>`;
+  // 가운데: 예상 퇴근
+  const fin=sch.finish,late=sch.late;
+  const center=!showPlan||fin==null?`<text x="${C}" y="${C-8}" class="ck-c1">지금</text><text x="${C}" y="${C+20}" class="ck-c2">${clock(Math.floor(now))}</text>`:`<text x="${C}" y="${C-14}" class="ck-c1">예상 끝</text><text x="${C}" y="${C+14}" class="ck-c2 ${late>0?"late":"ok"}">${clock(Math.round(fin))}</text><text x="${C}" y="${C+34}" class="ck-c3 ${late>0?"late":"ok"}">${late>0?`야근 +${fmtDur(late)}`:`퇴근 ${clock(c.e)} 안 ✓`}</text>`;
+  return `<svg class="tr-clock" viewBox="0 0 300 300" role="img" aria-label="오늘 원형 시간표"><circle cx="${C}" cy="${C}" r="148" class="ck-face"/>${face}${g}${marks}<circle cx="${C}" cy="${C}" r="${inner}" class="ck-center"/>${hand}${center}</svg>`;
+}
+function agendaList(sch){
+  const up=sch.blocks.filter(x=>x.b>sch.now||x.cur).slice(0,8);if(!up.length)return"";
+  return `<ol class="tr-agenda">${up.map(x=>`<li class="${x.cur?"cur":""} ${x.b>sch.c.e?"late":""} ${x.kind}"${x.kind==="req"?` style="${cvars(x.cid)}"`:""}><time>${clock(Math.round(x.a))}–${clock(Math.round(x.b))}</time><span>${x.cur?`<em>지금</em>`:""}${x.fixed!=null?"📌 ":x.kind==="req"?"🎯 ":"📝 "}${x.kind==="req"&&x.num?`<b>${x.num}</b> `:""}${esc(x.label)}${x.cur&&x.b>sch.now?` <small>· 남은 ${fmtDur(x.b-sch.now)}</small>`:""}${x.over?` <small class="tr-em">· +${fmtDur(x.over)} 넘김</small>`:""}</span></li>`).join("")}</ol>`;
+}
 // 오늘 여유: 퇴근(야근 끝)까지 남은 근무 시간 − 남은 건수 × 보통 몇 분 (타이머에서 고른 시간 평균) + 타임라인
 function timeCard(s,p){
   if(!p.workday||!p.goal)return"";
-  const t=timePlan(s,p),c=t.c,span=c.e-c.s,pos=m=>Math.max(0,Math.min(100,(m-c.s)/span*100));
+  const t=timePlan(s,p),c=t.c;
   const otBtns=(label)=>`<div class="tr-ot"><span>${label}</span>${[60,120,180].map(x=>`<button class="tr-btn sm" data-ot="${x}">${x/60}시간</button>`).join("")}<button class="tr-btn sm ghost" data-ot="pick">직접</button></div>`;
-  const typ=typicalMin(s),R=t.R,from=Math.max(t.now,c.s),avail=workBetween(from,c.e,c),need=R*typ,tMin=todoMin(todayTodos()),slack=avail-need-tMin;
-  const hasGoals=Object.keys(s.settings?.timer_goals||{}).length>0;
+  const typ=typicalMin(s),R=t.R,from=Math.max(t.now,c.s),avail=workBetween(from,c.e,c),need=R*typ,tMin=todoMin(todayTodos());
+  const hasGoals=Object.keys(s.settings?.timer_goals||{}).length>0,sch=daySchedule(s,p),pending=sch.blocks.length>0;
   let big,sub;
-  if(!R){
+  if(!pending){
     big=t.overtime?"🌙 보너스 타임":"오늘 몫 끝! 🎉";
-    sub=`${t.overtime?`야근 끝(${clock(c.e)})까지`:"퇴근까지"} <b>${fmtDur(t.nowRem)}</b>${tMin?` · 남은 할 일 <b>${fmtDur(tMin)}</b>`:""}${t.extra?` · 목표보다 <b class="tr-ok">+${t.extra}건</b>`:""} · 하나 더 할 때마다 내일 목표가 줄어요 (지금 내일 <b>${p.tomorrowIfStop}</b>건)`;
+    sub=`${t.overtime?`야근 끝(${clock(c.e)})까지`:"퇴근까지"} <b>${fmtDur(t.nowRem)}</b>${t.extra?` · 목표보다 <b class="tr-ok">+${t.extra}건</b>`:""} · 하나 더 할 때마다 내일 목표가 줄어요 (지금 내일 <b>${p.tomorrowIfStop}</b>건)`;
   }else{
-    big=slack>=0?`여유 <b class="tr-slack">${fmtDur(slack)}</b>`:`<span class="tr-over">${fmtDur(-slack)} 부족</span>`;
-    sub=`${t.phase==="before"?`${clock(c.s)} 출근부터`:t.overtime||t.phase==="gap"?`야근 끝(${clock(c.e)})까지`:"퇴근까지"} <b>${fmtDur(avail)}</b> · 남은 ${R}건 × 보통 ${fmtDur(typ)} = <b>${fmtDur(need)}</b>${tMin?` + 할 일 <b>${fmtDur(tMin)}</b>`:""}${slack<0?` · 오늘 다 하려면 건당 <b class="tr-em">${fmtDur(Math.max(0,avail-tMin)/R)}</b> 안에`:""}`;
+    big=sch.late>0?`<span class="tr-over">${fmtDur(sch.late)} 부족</span>`:`여유 <b class="tr-slack">${fmtDur(sch.slack||0)}</b>`;
+    sub=`${t.phase==="before"?`${clock(c.s)} 출근부터`:t.overtime||t.phase==="gap"?`야근 끝(${clock(c.e)})까지`:"퇴근까지"} <b>${fmtDur(avail)}</b> · 의뢰서 ${R}건 × 보통 ${fmtDur(typ)}${tMin?` + 할 일 <b>${fmtDur(tMin)}</b>`:""}${sch.late>0&&R?(avail-tMin)/R>=5?` · 퇴근 안에 끝내려면 건당 <b class="tr-em">${fmtDur((avail-tMin)/R)}</b> 안에`:` · 오늘 퇴근 안엔 어려워요`:""}`;
     if(t.phase==="lunch")sub=`🍚 점심시간 · ${clock(c.le)}부터 다시 · `+sub;
     if(t.phase==="gap")sub=`☕ 쉬는 중 · ${clock(c.ot.s)}부터 야근 · `+sub;
   }
-  // 타임라인: 끝낸 것(초록) → 지금부터 남은 일(보통 N분씩) → 여유(연두) · 점심·쉼 · 야근
-  const seg=(a,b2,cls,title="")=>clockSegs(a,b2,c).map(([x,y])=>`<i class="tr-tl-seg ${cls}" style="left:${pos(x)}%;width:${Math.max(.4,pos(y)-pos(x))}%" title="${esc(title)}"></i>`).join("");
-  let bars=c.breaks.map(([x,y])=>`<i class="tr-tl-lunch ${x===c.ls?"":"gap"}" style="left:${pos(x)}%;width:${pos(y)-pos(x)}%"></i>`).join("");
-  if(c.ot)bars=`<i class="tr-tl-ot" style="left:${pos(c.ot.s)}%;width:${pos(c.ot.e)-pos(c.ot.s)}%"></i>`+bars;
-  t.ends.forEach((e,i)=>{const st=i?t.ends[i-1]:c.s,u=t.doneU[i];bars+=seg(st,e,i>=p.goal?"done bonus":"done",`${clock(e)} 완료 · ${u.group?u.group.name:u.items[0].code}`)});
-  if(R&&t.phase!=="after"){
-    for(let k=0;k<R;k++){const a=addWork(from,typ*k,c);if(a>=c.e)break;bars+=seg(a,Math.min(c.e,addWork(from,typ*(k+1),c)),"next",`남은 일 ${k+1} · 보통 ${fmtDur(typ)}`)}
-    if(tMin&&addWork(from,need,c)<c.e)bars+=seg(addWork(from,need,c),Math.min(c.e,addWork(from,need+tMin,c)),"todo",`할 일 ${fmtDur(tMin)}`);
-    if(slack>0)bars+=seg(addWork(from,need+tMin,c),c.e,"slack",`여유 ${fmtDur(slack)}`);
-  }
-  const ticks=[],step=span>720?2:1;for(let h=Math.ceil(c.s/60);h*60<=c.e;h+=step)ticks.push(`<span style="left:${pos(h*60)}%">${h}</span>`);
-  const nowMark=t.now>=c.s&&t.now<=c.e?`<b class="tr-tl-now" style="left:${pos(t.now)}%"><em>${clock(Math.floor(t.now))}</em></b>`:"";
-  const tl=`<div class="tr-tl"><div class="tr-tl-track">${bars}${nowMark}</div><div class="tr-tl-ticks">${ticks.join("")}</div></div><div class="tr-tl-legend"><span><i class="done"></i>끝낸 것</span><span><i class="next"></i>남은 일 (보통 ${fmtDur(typ)})</span>${tMin?`<span><i class="todo"></i>할 일</span>`:""}<span><i class="slack"></i>여유</span><span><i class="lunch"></i>점심·쉼</span>${c.ot?`<span><i class="ot"></i>야근</span>`:""}</div>`;
+  const legend=`<div class="tr-tl-legend"><span><i class="done"></i>끝낸 것</span><span><i class="cur"></i>지금</span><span><i class="next"></i>의뢰서 (보통 ${fmtDur(typ)})</span><span><i class="todo"></i>할 일 · 📌 시각 고정</span><span><i class="lunch"></i>점심·쉼</span><span><i class="late"></i>퇴근 뒤</span></div>`;
+  const tl=`<div class="tr-clockwrap">${clockSVG(sch,s,t.phase!=="after")}${t.phase!=="after"?agendaList(sch):""}</div>${legend}`;
   if(t.phase==="after")return dayEndCard(s,p,t,tl,otBtns(t.R?"🌙 더 할래요":"🌙 조금 더 할래요"));
   const otInfo=c.ot?` · 🌙 야근 ${clock(c.ot.s)}–${clock(c.ot.e)}`:"";
   const otCtl=t.overtime||t.phase==="gap"?`<div class="tr-ot"><span>🌙 야근 중 · ${clock(c.ot.e)}까지</span><button class="tr-btn sm" data-ot="ext">+1시간</button><button class="tr-btn sm ghost" data-ot="end">야근 끝</button></div>`:"";
-  return `<section class="card tr-card tr-timecard ${R&&slack<0?"over":""} ${t.overtime?"ot":""}"><div class="tr-time-head"><div><div class="tr-eyebrow">${t.overtime?"🌙 야근 중 · ":""}⏳ 오늘 여유</div><div class="tr-time-big">${big}</div></div><span class="tr-time-hours">${clock(c.s)}–${clock(c.end0)} · 점심 ${clock(c.ls)}–${clock(c.le)}${otInfo}</span></div><p class="tr-time-sub">${sub}</p>${R&&!hasGoals?`<p class="tr-time-note">보통 ${fmtDur(typ)}은 기본값이에요 · ⏱ 타이머에서 고른 시간의 평균으로 바뀌어요</p>`:""}${otCtl}${tl}</section>`;
+  return `<section class="card tr-card tr-timecard ${pending&&sch.late>0?"over":""} ${t.overtime?"ot":""}"><div class="tr-time-head"><div><div class="tr-eyebrow">${t.overtime?"🌙 야근 중 · ":""}🕘 오늘 시간표</div><div class="tr-time-big">${big}</div></div><span class="tr-time-hours">${clock(c.s)}–${clock(c.end0)} · 점심 ${clock(c.ls)}–${clock(c.le)}${otInfo}</span></div><p class="tr-time-sub">${sub}</p>${pending&&R&&!hasGoals?`<p class="tr-time-note">보통 ${fmtDur(typ)}은 기본값이에요 · ⏱ 타이머에서 고른 시간의 평균으로 바뀌어요</p>`:""}${otCtl}${tl}</section>`;
 }
 // 퇴근(야근 끝) 뒤: 오늘 N건 완료 · 건당 M분 · 내일 목표 K건 + 오늘 타임라인
 function dayEndCard(s,p,t,tl,otUI){
@@ -978,7 +1058,11 @@ function todoPreview(text){const l=parseTodos(text),m=l.reduce((a,x)=>a+(x.min||
 function todoCard(s,p){
   const list=todayTodos(),done=list.filter(taskDone).length,left=todoMin(list),carry=carryTodos();
   return `<section class="card tr-card tr-todo"><div class="tr-todo-head"><div><div class="tr-eyebrow">📝 오늘 할 일</div><h3><b class="tr-ok">${done}</b> / ${list.length}개${p.workday&&p.goal?` <small>· 🎯 의뢰서 ${p.doneTodayU.length}/${p.goal}건</small>`:""}</h3></div>${left?`<span class="tr-todo-min">남은 할 일 ${fmtDur(left)}</span>`:""}</div>
-  <div class="tr-todo-list">${list.map(t=>`<div class="tr-todo-row ${taskDone(t)?"done":""}" data-todo="${esc(t.id)}"><span class="tr-grip" title="끌어서 순서 바꾸기">⠿</span><button class="tr-todo-check ${taskDone(t)?"on":""}" data-todo-toggle="${esc(t.id)}" aria-label="${taskDone(t)?"완료 취소":"완료"}">✓</button><span class="tr-todo-title">${esc(t.emoji?t.emoji+" ":"")}${esc(t.title)}</span>${t.estimateMin?`<span class="tr-chip">${fmtDur(t.estimateMin)}</span>`:"<span></span>"}<button class="tr-todo-x" data-todo-drop="${esc(t.id)}" title="오늘에서 빼기" aria-label="오늘에서 빼기">×</button></div>`).join("")||`<p class="tr-sub">아직 없어요. 아래에 적어요.</p>`}</div>
+  <div class="tr-todo-list">${dayOrder(s,p).map(o=>{
+    if(o.kind==="req"){const left=Math.max(0,p.goal-p.doneTodayU.length);return `<div class="tr-todo-row req" data-todo="__req__"><span class="tr-grip" title="끌어서 하루 순서 바꾸기">⠿</span><span class="tr-todo-check req" aria-hidden="true">🎯</span><span class="tr-todo-title">의뢰서 <b>${p.doneTodayU.length}/${p.goal}</b>건</span><span class="tr-chip">${left?`${left}건 × ${fmtDur(typicalMin(s))}`:"✓ 오늘 몫 끝"}</span><span></span></div>`}
+    const t=o.t,fx=fixedAt(t.title);
+    return `<div class="tr-todo-row ${taskDone(t)?"done":""}" data-todo="${esc(t.id)}"><span class="tr-grip" title="끌어서 순서 바꾸기">⠿</span><button class="tr-todo-check ${taskDone(t)?"on":""}" data-todo-toggle="${esc(t.id)}" aria-label="${taskDone(t)?"완료 취소":"완료"}">✓</button><span class="tr-todo-title">${esc(t.emoji?t.emoji+" ":"")}${esc(t.title)}</span><span class="tr-chips">${fx!=null?`<span class="tr-chip fixed">📌 ${clock(fx)}</span>`:""}${t.estimateMin?`<span class="tr-chip">${fmtDur(t.estimateMin)}</span>`:""}</span><button class="tr-todo-x" data-todo-drop="${esc(t.id)}" title="오늘에서 빼기" aria-label="오늘에서 빼기">×</button></div>`;
+  }).join("")||`<p class="tr-sub">아직 없어요. 아래에 적어요.</p>`}</div><p class="tr-todo-hint">⠿ 끌어서 하루 순서를 정해요 · "3시 회의"처럼 시각을 적으면 그 시간에 고정 · 시간 안 적은 일은 15분으로 계산</p>
   <form class="tr-todo-add" data-form="todo-add"><input name="t" value="${esc(TR.drafts.t||"")}" placeholder="+ 할 일 추가 · 예) 샘플 체크 30분" autocomplete="off"><button class="tr-btn sm" type="submit">추가</button></form>${carry.length?`<button class="tr-link tr-todo-carry" data-act="todo-carry">↩ 지난번에 못 한 거 ${carry.length}개 가져오기</button>`:""}</section>`;
 }
 // 오늘 화면 카드: 그림 크게 (추천 순서 번호 · 아래쪽에 ⏱ 와 완료 버튼)
@@ -993,7 +1077,7 @@ function viewToday(s){
   const unconfirmed=itemsOf(s.id).filter(i=>i.auto_done!=null&&!i.confirmed).length;
   const zoom=`<span class="tr-zoom" role="group" aria-label="그림 크기"><button data-tzoom="-1" ${TR.tzoom<=1?"disabled":""} aria-label="작게" title="작게">−</button><button data-tzoom="1" ${TR.tzoom>=ZOOMS.length?"disabled":""} aria-label="크게" title="크게">＋</button></span>`;
   const started=s.settings?.day_start===p.today,showStart=!started&&p.workday;
-  return `${timerBar(s,p)}${showStart?startCard(s,p):""}${goalBar(p)}${!showStart&&(started||todayTodos().length)?todoCard(s,p):""}${activeSession()?"":timeCard(s,p)}${heroCard(s,p)}
+  return `${timerBar(s,p)}${showStart?startCard(s,p):""}${goalBar(p)}${!showStart&&(started||todayTodos().length)?todoCard(s,p):""}${timeCard(s,p)}${heroCard(s,p)}
   ${unconfirmed?`<button class="tr-notice" data-view="season">🤖 자동 추정 확인이 필요한 의뢰서 ${unconfirmed}건 →</button>`:""}
   <section class="section tr-today" data-zoom="${TR.tzoom}"><div class="section-title"><h3>${p.workday?"오늘 할 의뢰서":"다음에 할 의뢰서"}</h3><span class="tr-today-tools"><button class="tr-link" data-act="one-only">${TR.oneOnly?"전체 보기":"다음 하나만"}</button>${zoom}</span></div>${shown.length?`<div class="tr-grid tr-today-grid" style="--tr-card:${ZOOMS[TR.tzoom-1]||300}px">${shown.map((it,n)=>todayCard(it,p,s,n+1)).join("")}</div>`:`<div class="empty">${p.st.target?"남은 의뢰서가 없어요.":"아직 등록된 의뢰서가 없어요."}</div>`}${TR.oneOnly&&todoItems.length>1?`<div class="tr-more">+ ${todoItems.length-1}건은 숨겨 뒀어요</div>`:""}</section>
   <section class="section"><div class="section-title"><h3>오늘 완료 기록</h3><span>${p.doneToday.length}건</span></div>${p.doneToday.length?`<div class="tr-grid tr-today-grid tr-today-done">${[...p.doneToday].sort((a,b)=>(b.completed_at||"").localeCompare(a.completed_at||"")).map(it=>todayCard(it,p,s,0)).join("")}</div>`:`<div class="empty">아직 완료한 의뢰서가 없어요.</div>`}</section>`;
