@@ -202,7 +202,7 @@ body.tr-on{overflow:hidden}
 .ck-c2.late,.ck-c3.late{fill:var(--danger)}
 .ck-c3{font-size:12px;font-weight:800;text-anchor:middle}
 .tr-agenda{list-style:none;margin:0;padding:0;display:grid;gap:4px;align-content:start}
-.tr-agenda li{display:grid;grid-template-columns:92px minmax(0,1fr) auto auto;gap:8px;align-items:center;padding:6px 10px;border-radius:var(--r-sm);background:#faf8f5;border-left:4px solid #d9d1c6;font-size:14px}
+.tr-agenda li{display:grid;grid-template-columns:auto minmax(0,1fr) auto;gap:10px;align-items:center;padding:6px 10px;border-radius:var(--r-sm);background:#faf8f5;border-left:4px solid #d9d1c6;font-size:14px}
 .tr-agenda li.req{border-left-color:var(--cc,#d9d1c6)}
 .tr-agenda li.todo{border-left-color:#a796d8}
 .tr-agenda li.cur{background:#fff;box-shadow:0 0 0 2px var(--ink) inset;font-weight:700}
@@ -216,6 +216,15 @@ body.tr-on{overflow:hidden}
 .tr-tl-legend .next{background:var(--tr-bg);border:1.5px solid var(--tr)}
 .tr-tl-legend .late{background:#f6c9c3;border:1px solid var(--danger)}
 
+.ag-thumb{position:relative;display:block;width:112px;padding:0;border:0;background:none;cursor:zoom-in}
+.ag-thumb .tr-thumb{border-radius:8px;border:1.5px solid color-mix(in srgb,var(--cc,#ccc) 45%,#fff)}
+.ag-num{position:absolute;top:4px;left:4px;min-width:20px;height:20px;padding:0 5px;border-radius:99px;display:grid;place-items:center;background:var(--cc,var(--tr));color:#fff;font-size:12px;font-weight:800}
+.ag-icon{display:grid;place-items:center;width:112px;height:44px;border-radius:8px;background:#f1ecfa;font-size:22px}
+.ag-main{display:grid;gap:1px;min-width:0}
+.ag-main time{font-size:13px}
+.ag-label{font-weight:700;font-size:15px}
+.ag-sub{font-size:12px;font-weight:600;color:var(--muted);overflow-wrap:anywhere}
+.ag-ctl{display:flex;align-items:center;gap:8px}
 .tr-agenda li.next{background:#fff;box-shadow:0 0 0 2px var(--tr) inset}
 .tr-agenda li.unp{background:#fffcf3;border-left-style:dashed}
 .tr-agenda li.unp time{color:var(--tr);font-size:12px}
@@ -409,8 +418,9 @@ body.tr-on{overflow:hidden}
 .tr-toast.on{opacity:1;transform:translate(-50%,0)}
 
 @media(max-width:680px){
-  .tr-agenda li{grid-template-columns:minmax(0,1fr) auto auto;row-gap:2px}
-  .tr-agenda li time{grid-column:1/-1}
+  .tr-agenda li{grid-template-columns:88px minmax(0,1fr);row-gap:6px}
+  .ag-thumb,.ag-icon{width:88px}
+  .ag-ctl{grid-column:2;justify-content:flex-end}
   .tr-agenda .ag-label{overflow-wrap:normal;word-break:keep-all}
   .tr-stopwatch:has(.tr-sw-todo){grid-template-columns:64px minmax(0,1fr)}
   .tr-clockwrap{grid-template-columns:1fr;gap:12px}
