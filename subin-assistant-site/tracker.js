@@ -403,12 +403,8 @@ async function setDone(itemId,done){
 const TIMER_CHOICES=[15,20,30,45,60];
 const timerGoal=x=>Number(byId("seasons",x?.season_id)?.settings?.timer_goals?.[x?.id])||0;
 const timerResult=(sec,goal)=>{const m=Math.max(1,Math.round(sec/60)),d=goal-m;return `⏱ ${fmtDur(m)} 걸렸어요${goal?` · 목표 ${fmtDur(goal)}${d>0?`보다 ${fmtDur(d)} 빨리 🎉`:d<0?`보다 ${fmtDur(-d)} 더`:" 딱 맞춤 👍"}`:""}`};
-// 경과 초: 시작~끝 실제 시간에서 그날 점심·쉼과 겹친 만큼 뺀다
-function workSec(st,end,s){
-  let sec=Math.max(0,(end-st)/1000);const day=dayOf(st);
-  if(s&&dayOf(end)===day){const c=workCfg(s,day),a=seoulMin(st),b=seoulMin(end);sec-=c.breaks.reduce((t,[b0,b1])=>t+Math.max(0,Math.min(b,b1)-Math.max(a,b0)),0)*60}
-  return Math.max(0,Math.round(sec));
-}
+// 경과 초: ▶ 시작을 누른 뒤 실제로 흐른 시간 (점심시간에 일해도 그대로 흐른다. 쉬러 가면 ⏸ 멈춤)
+function workSec(st,end){return Math.max(0,Math.round((end-st)/1000))}
 function timerSec(x){return workSec(Date.parse(x.started_at),x.ended_at?Date.parse(x.ended_at):Date.now(),byId("seasons",x.season_id))}
 // 의뢰서 칸마다 내가 정한 분: 시즌 settings.plan_min[작업 키] (묶음은 g:묶음id, 아니면 의뢰서 id). 안 정하면 미정
 const unitPlan=(s,u)=>{const v=Number(s?.settings?.plan_min?.[u.key]);return v>0?v:null};
@@ -994,7 +990,7 @@ function daySchedule(s,p){
   const blocks=[];let cur=outBusy(Math.max(now,c.s),busy);
   // 지금 재는 것: 시작한 때부터 정한 시간, 넘기면 지금까지 늘어나고 뒤가 밀린다
   if(run&&(runU||runT)){
-    const a=seoulMin(run.start),planned=run.goal?addBusy(a,run.goal,busy):now,b=Math.max(planned,now);
+    const a=seoulMin(run.start),planned=run.goal?a+run.goal:now,b=Math.max(planned,now);
     blocks.push({kind:run.kind,k:runU?"u:"+runU.key:"t:"+run.id,id:run.id,key:runU?.key,label:runU?.group?runU.group.name:run.label,num:runU?num.get(run.id):null,cid:run.item?.concept_id,dur:run.goal||null,a,b,cur:true,over:run.goal&&now>planned?now-planned:0});
     cur=outBusy(Math.max(cur,b),busy);
   }
@@ -1015,7 +1011,7 @@ function clockSVG(sch,s,showPlan){
   c.breaks.forEach(([a,b])=>g+=slice(a,b,"ck-break"));
   sch.past.forEach(x=>{g+=slice(x.a,x.b,x.kind==="req"?"ck-done":"ck-done todo","",`${clock(x.b)} 완료 · ${x.label}`)+label(x.a,x.b,x.kind==="req"?"✓":short(x.label))});
   if(showPlan)sch.blocks.forEach(x=>{
-    const segs=x.fixed!=null?[[x.a,x.b]]:splitBusy(x.a,x.b,sch.busy),cls=`ck-${x.kind}${x.fixed!=null?" fixed":""}${x.cur?" cur":""}`,title=`${clock(x.a)}–${clock(x.b)} · ${x.kind==="req"?"의뢰서 ":""}${x.label}`;
+    const segs=x.fixed!=null||x.cur?[[x.a,x.b]]:splitBusy(x.a,x.b,sch.busy),cls=`ck-${x.kind}${x.fixed!=null?" fixed":""}${x.cur?" cur":""}`,title=`${clock(x.a)}–${clock(x.b)} · ${x.kind==="req"?"의뢰서 ":""}${x.label}`;
     segs.forEach(([a,b])=>{
       const sty=x.kind==="req"?col(x.cid):"";
       if(b<=c.e)g+=slice(a,b,cls,sty,title);else if(a>=c.e)g+=slice(a,b,cls+" ck-late","",title+" · 퇴근 뒤");else g+=slice(a,c.e,cls,sty,title)+slice(c.e,b,cls+" ck-late","",title+" · 퇴근 뒤");
