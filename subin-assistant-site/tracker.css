@@ -249,6 +249,10 @@ body.tr-on{overflow:hidden}
 .tr-chips{display:flex;gap:4px;flex-wrap:wrap;justify-content:flex-end}
 .tr-chip.fixed{background:#e8e1f6;color:#4b3f86;font-weight:700}
 .tr-todo-hint{margin:6px 2px 0;font-size:12px;color:var(--muted);font-weight:600}
+/* 컨셉별 마감 */
+.tr-dl-own{font-size:12px;font-weight:700;color:var(--tr)}
+.tr-gauge-dl{margin-left:auto;margin-right:6px;font-size:12px;font-weight:700;color:var(--tr);white-space:nowrap}
+.tr .tr-cdl{padding:8px 6px;font-size:14px}
 /* 완료 예상일 */
 .tr-forecast{grid-column:1/-1;margin:10px 4px 0;padding:9px 12px;border-radius:var(--r-md);background:#f3f7f1;font-size:15px;font-weight:600;color:var(--ink-2);text-align:left}
 .tr-forecast b{font-weight:800;color:var(--ink)}
@@ -394,7 +398,7 @@ body.tr-on{overflow:hidden}
 .tr input,.tr select{width:100%;min-width:0;padding:9px 10px;border:1px solid var(--line);border-radius:var(--r-sm);background:#fff;color:var(--ink);font-size:16px}
 .tr-form .tr-btn{justify-self:start}
 .tr-concepts{display:grid;gap:8px;margin:10px 0}
-.tr-concept-row{display:grid;grid-template-columns:auto minmax(0,1fr) 72px auto auto auto;gap:6px;align-items:center;margin-top:8px}
+.tr-concept-row{display:grid;grid-template-columns:auto minmax(0,1fr) 72px 150px auto auto auto;gap:6px;align-items:center;margin-top:8px}
 .tr-concept-row[data-form="concept-new"]{grid-template-columns:minmax(0,1fr) 72px auto}
 .tr-corder{display:flex;flex-direction:column;gap:2px}
 .tr-cmove{border:1px solid var(--line);background:#fff;border-radius:6px;width:28px;height:19px;font-size:9px;line-height:1;color:var(--ink-2);padding:0}
