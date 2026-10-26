@@ -282,10 +282,18 @@ body.tr-on{overflow:hidden}
 .tr-goal-info b{font-weight:800}
 .tr-goal-note{display:block;font-size:var(--fs-sm);color:var(--muted);margin-top:2px}
 
-.tr-gauges{display:grid;grid-template-columns:repeat(auto-fill,minmax(240px,1fr));gap:8px}
+.tr-gauges{display:grid;grid-template-columns:repeat(auto-fill,minmax(240px,1fr));gap:8px;align-items:start}
 /* 컨셉 카드: 컨셉 색 연한 배경 + 컨셉 색 게이지, 개수·퍼센트 크게 */
 .tr-gauge{text-align:left;padding:12px 14px;border-radius:var(--r-md);background:var(--cc-bg,var(--paper));border-color:color-mix(in srgb,var(--cc,#ccc) 28%,transparent)}
 .tr-gauge-head{display:flex;gap:8px;align-items:center}
+.tr-gauge-fold{display:grid;place-items:center;width:24px;height:24px;margin-left:-4px;padding:0;border:0;border-radius:50%;background:rgba(255,255,255,.7);color:color-mix(in srgb,var(--cc,#333) 70%,var(--ink));flex:none}
+.tr-gauge-body{display:block;width:100%;padding:0;border:0;background:none;text-align:left;font:inherit;color:inherit;cursor:pointer}
+/* 접힌 컨셉: 컬러 배너 + 컨셉명 */
+.tr-gauge.closed{padding:0;overflow:hidden;border-color:var(--cc,#ccc)}
+.tr-gauge-bar{display:flex;align-items:center;gap:8px;width:100%;padding:11px 14px;border:0;background:var(--cc,#999);color:#fff;font:inherit;text-align:left;cursor:pointer}
+.tr-gauge-bar b{flex:1;font-size:var(--fs-md);font-weight:800;overflow-wrap:anywhere}
+.tr-gauge-bar span:last-child{font-size:13px;font-weight:700;opacity:.92;white-space:nowrap}
+.tr-gauge-bar .tr-caret{transform:rotate(-90deg);color:#fff}
 .tr-gauge-head b{flex:1;font-size:var(--fs-md);overflow-wrap:anywhere;color:color-mix(in srgb,var(--cc,#333) 70%,var(--ink))}
 .tr-gauge-head em{font-style:normal;font-size:var(--fs-xs);font-weight:700;padding:1px 7px;border-radius:99px;background:rgba(255,255,255,.7);color:var(--muted)}
 .tr-gauge-nums{display:flex;align-items:baseline;justify-content:space-between;margin-top:6px}
