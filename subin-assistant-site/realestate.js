@@ -90,7 +90,7 @@ const isNewTrade=t=>t.seen&&t.seen>=addDay(todayISO(),-7)&&!t.x;
 const newTrades=id=>tradesOf(id).filter(isNewTrade);
 const lastOf=(id,key)=>newsOf(id).find(n=>n[key]!=null);
 const signed=n=>(n>0?"+":n<0?"−":"")+eok(Math.abs(n));
-const man=n=>Math.round(n).toLocaleString()+"만";
+const man=n=>{n=Math.round(n);const e=Math.floor(Math.abs(n)/10000),r=Math.abs(n)%10000;return e?`${n<0?"−":""}${e}억${r?" "+r.toLocaleString()+"만":""}`:n.toLocaleString()+"만"};
 const typing=()=>{const a=document.activeElement;return !!(a&&a.closest&&a.closest("#re-root")&&/^(TEXTAREA|INPUT)$/.test(a.tagName))};
 // 접었다 펴는 상자. 다시 그려도 펴 둔 상태가 유지되게 RE.fold에 적어 둔다.
 const fold=(key,title,body,open=false,cls="card re-fold")=>`<details class="${cls}" data-re-fold="${esc(key)}" ${(key in RE.fold?RE.fold[key]:open)?"open":""}><summary><span>${title}</span><i aria-hidden="true"></i></summary><div class="re-fold-body">${body}</div></details>`;
@@ -165,10 +165,11 @@ function costsFor(price){
   const tax=p*rate*1.1-relief,fee=p*feeRate*1.1,legal=p*0.0033;
   return {tax,relief,fee,legal,sum:tax+fee+legal};
 }
-const CALC_DEF={cash:5,loan:4,price:9,etc:1000,rate:4.5,years:30}; // 내 숫자는 조사 내용(plan.calcDefault)과 저장한 값에서 온다
+const CALC_DEF={cash:5,loan:4,price:9,etc:1000,rate:4.5,years:30,card:0}; // 내 숫자는 조사 내용(plan.calcDefault)과 저장한 값에서 온다
 const calcSaved=()=>({...CALC_DEF,...(RE.seed.docs.plan?.calcDefault||{}),...(RE.user.calc||{})});
 const loanCap=(v,price)=>Math.min(v.loan,6,price*0.7); // 수도권 주담대 6억, 생애최초 집값의 70%
-const cashNeed=(v,price)=>price*10000-loanCap(v,price)*10000+costsFor(price).sum+v.etc;
+// card: 취득세를 카드 할부로 내는 개월 수(0이면 현금). 카드로 내면 잔금 때 현금에서 취득세가 빠진다.
+const cashNeed=(v,price)=>{const c=costsFor(price);return price*10000-loanCap(v,price)*10000+c.sum-(v.card>0?c.tax:0)+v.etc};
 // 이 현금·대출로 살 수 있는 가장 비싼 집(억). 세금·수수료·이사비를 빼고 계산한다.
 function maxPrice(v){let lo=1,hi=40;for(let i=0;i<40;i++){const mid=(lo+hi)/2;if(cashNeed(v,mid)<=v.cash*10000)lo=mid;else hi=mid}return Math.floor(lo*20)/20}
 function budgetBadge(c){
@@ -426,7 +427,7 @@ function viewCompare(){
 function calcBox(){
   const v=calcSaved();
   const f=(k,l,unit,step)=>`<label>${l}<span><input type="number" name="${k}" value="${v[k]}" step="${step}" min="0" inputmode="decimal"> ${unit}</span></label>`;
-  return `<form id="re-calc" class="re-calc"><div class="re-calc-in">${f("cash","가진 현금","억",0.1)}${f("loan","대출","억",0.1)}${f("price","매매가","억",0.05)}${f("etc","이사·수리 등","만원",100)}${f("rate","대출 금리","%",0.1)}${f("years","대출 기간","년",5)}</div><div id="re-calc-out" class="re-calc-out" aria-live="polite"></div>${locked()?"":`<button type="submit">이 값 저장</button>`}</form>`;
+  return `<form id="re-calc" class="re-calc"><div class="re-calc-in">${f("cash","가진 현금","억",0.1)}${f("loan","대출","억",0.1)}${f("price","매매가","억",0.05)}${f("etc","이사·수리 등","만원",100)}${f("rate","대출 금리","%",0.1)}${f("years","대출 기간","년",5)}<label>취득세 내는 방법<span><select name="card">${[[0,"현금"],[2,"카드 2개월"],[3,"카드 3개월"],[4,"카드 4개월"],[5,"카드 5개월"],[6,"카드 6개월"],[10,"카드 10개월"],[12,"카드 12개월"]].map(([n,l])=>`<option value="${n}" ${Number(v.card||0)===n?"selected":""}>${l}</option>`).join("")}</select></span></label></div><div id="re-calc-out" class="re-calc-out" aria-live="polite"></div>${locked()?"":`<button type="submit">이 값 저장</button>`}</form>`;
 }
 function calcValues(){
   const form=document.getElementById("re-calc");if(!form)return null;
@@ -437,19 +438,20 @@ function calcRender(){
   const v=calcValues(),out=document.getElementById("re-calc-out");if(!v||!out)return;
   if(!v.price){out.innerHTML=`<p class="re-note">매매가를 넣어 주세요.</p>`;return}
   const c=costsFor(v.price),loan=loanCap(v,v.price),total=cashNeed(v,v.price),left=v.cash*10000-total;
-  const r=v.rate/1200,n=v.years*12,pay=loan&&n?(r?loan*10000*r/(1-Math.pow(1+r,-n)):loan*10000/n):0;
+  const r=v.rate/1200,n=v.years*12,pay=loan&&n?(r?loan*10000*r/(1-Math.pow(1+r,-n)):loan*10000/n):0,cardPay=v.card>0?c.tax/v.card:0;
   const warn=[v.loan>6?"수도권 주담대는 6억까지라 6억으로 계산했어요.":"",Math.min(v.loan,6)>v.price*0.7?`생애최초도 집값의 70%(${eok(v.price*0.7)})까지라 그만큼만 계산했어요.`:""].filter(Boolean);
   const line=(k,val,note)=>`<div><dt>${k}</dt><dd>${val}${note?`<small>${note}</small>`:""}</dd></div>`;
   out.innerHTML=`<dl class="re-facts">
-    ${line("취득세 + 지방교육세",man(c.tax),c.relief?"생애최초 감면 200만 반영":v.price>12?"12억 초과라 감면 없음":"")}
+    ${line("취득세 + 지방교육세",man(c.tax),[c.relief?"생애최초 감면 200만 반영":v.price>12?"12억 초과라 감면 없음":"",v.card>0?`카드 ${v.card}개월 할부라 잔금 때 현금에서 뺐어요`:""].filter(Boolean).join(" · "))}
     ${line("중개보수 (상한)",man(c.fee),"부가세 포함, 깎을 수 있음")}
     ${line("등기 · 법무 등",man(c.legal),"어림값")}
     ${line("이사 · 수리 등",man(v.etc),"")}
-    ${line("필요한 현금",eok(total/10000),`매매가 − 대출 ${eok(loan)} + 부대비용 ${man(c.sum+v.etc)}`)}
+    ${line("잔금 때 필요한 현금",eok(total/10000),`매매가 − 대출 ${eok(loan)} + 부대비용 ${man(c.sum-(v.card>0?c.tax:0)+v.etc)}`)}
     ${line(left>=0?"남는 돈":"모자란 돈",`<b class="${left>=0?"re-ok":"re-short"}">${man(Math.abs(left))}</b>`,`현금 ${eok(v.cash)} 기준`)}
     ${line("살 수 있는 최대 매매가",`약 ${eok(maxPrice(v))}`,"이 현금·대출을 다 쓸 때. 저장하면 단지 카드의 '예산 안/초과' 표시에 쓰여요")}
     ${line("한 달 원리금",pay?man(pay):"-",pay?`${eok(loan)} · ${v.rate}% · ${v.years}년 원리금균등`:"")}
-  </dl>${warn.map(w=>`<p class="re-note">${w}</p>`).join("")}<p class="re-note">어림 계산이에요. 실제 세금·수수료·대출 한도는 계약 전에 다시 확인하세요.</p>`;
+    ${v.card>0?line("취득세 카드값 (한 달)",man(cardPay),`${v.card}개월 동안 · 원리금과 합치면 월 ${man(pay+cardPay)}`):""}
+  </dl>${v.card>0?`<p class="re-note">카드로 내려면 한도가 취득세(${man(c.tax)})보다 커야 해요. 카드사에 세금 납부용 일시 한도 상향이 되는지, 그 달 무이자 개월 수가 몇 개월인지 잔금 전에 확인하세요. 무이자가 아닌 개월은 할부 수수료가 붙어요.</p>`:""}${warn.map(w=>`<p class="re-note">${w}</p>`).join("")}<p class="re-note">어림 계산이에요. 실제 세금·수수료·대출 한도는 계약 전에 다시 확인하세요.</p>`;
 }
 function stepItem(s){
   const ym=todayISO().slice(0,7),now=s.from<=ym&&ym<=s.to,past=s.to<ym;
