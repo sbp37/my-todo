@@ -6,11 +6,12 @@
 //   user  — 내가 고친 값(단지별 메모·관심 매수가·별표·상태·링크·내가 본 매물·임장 기록, 전체 메모·비교 목록·자금 계산 값)
 //           가족 키로 비밀번호 없이 볼 때는 서버가 개인 기록(메모·매물·임장·계산 값)을 빼고 준다.
 //   agent — 에이전트(피클 등)가 올린 신문·단지별 소식·새 단지. "피클 추가" 뱃지로 구분한다.
+//   trades — 국토부 실거래가 자료에서 자동으로 받아 온 단지별 거래(기준 면적 ±3㎡). 서버가 6시간마다 새로 받는다.
 // 버튼 속성은 기존 앱과 겹치지 않게 data-re-* 만 쓴다.
 (()=>{
 const UI_KEY="subin-re-ui-v1";
 const CACHE_KEY="subin-re-cache-v1";
-const RE={seed:null,user:{complexes:{}},agent:{briefs:[],news:[],complexes:[]},loaded:false,loading:false,error:"",
+const RE={seed:null,user:{complexes:{}},agent:{briefs:[],news:[],complexes:[]},trades:{by:{},synced_at:null,error:null},loaded:false,loading:false,error:"",
   view:"home",detail:"",sort:"rank",region:"all",kind:"all",status:"all",starOnly:false,editLinks:false,fold:{},syncedAt:0};
 try{Object.assign(RE,JSON.parse(localStorage.getItem(UI_KEY)||"{}"))}catch(e){}
 RE.editLinks=false;RE.fold={};RE.syncedAt=0;
@@ -29,7 +30,25 @@ const NEWS_KIND={ask:"호가",listings:"매물 수",trade:"실거래",catalyst:"
 const eok=n=>n==null?"-":(Math.round(n*100)/100)+"억";
 const thisYear=()=>Number(todayISO().slice(0,4));
 const ageText=c=>!c.built?"":c.built>thisYear()?`${c.built}년 입주 예정`:`${c.built}년 · ${thisYear()-c.built+1}년차`;
-const complexes=()=>[...RE.seed.complexes,...(RE.agent.complexes||[])];
+const median=a=>{const b=[...a].sort((x,y)=>x-y),n=b.length;return n?(n%2?b[(n-1)/2]:(b[n/2-1]+b[n/2])/2):null};
+const tradesOf=id=>RE.trades.by?.[id]||[];
+// 실거래로 "지금 가격"을 잡는다: 최근 3개월(없으면 6개월) 거래의 중앙값. 취소·직거래는 빼고, 묶음 항목은 대표 단지만 본다.
+function liveOf(c){
+  const all=tradesOf(c.id);if(!all.length)return null;
+  const ok=all.filter(t=>!t.x),main=ok.filter(t=>!t.dg&&!t.i);
+  for(const months of [3,6]){
+    const d=new Date(todayISO()+"T00:00:00Z");d.setUTCMonth(d.getUTCMonth()-months);
+    const rec=main.filter(t=>t.d>=d.toISOString().slice(0,10));
+    if(rec.length)return {med:Math.round(median(rec.map(t=>t.p))*100)/100,n:rec.length,months,last:ok[0]||null};
+  }
+  return {med:null,n:0,months:0,last:ok[0]||null};
+}
+// 단지 목록. 실거래가 있으면 p26(최근 가격)을 실거래 중앙값으로 바꿔 끼운다(조사 때 값은 p26seed에 남긴다).
+let cxCache=null;
+function complexes(){
+  if(cxCache)return cxCache;
+  return cxCache=[...RE.seed.complexes,...(RE.agent.complexes||[])].map(c=>{const live=liveOf(c);return live?{...c,live,p26seed:c.p26,p26:live.med??c.p26}:c});
+}
 const findComplex=id=>complexes().find(c=>c.id===id);
 const ustate=id=>RE.user.complexes?.[id]||{};
 const targetOf=c=>{const u=ustate(c.id);return "target" in u?u.target:c.target};
@@ -64,7 +83,12 @@ const listingsOf=id=>ustate(id).listings||[];
 const myAsk=id=>{const a=listingsOf(id).filter(l=>!l.gone).map(l=>l.price);return a.length?Math.min(...a):null};
 const compareIds=()=>(RE.user.compare||[]).filter(id=>findComplex(id));
 // 화면에 보이는 가격이 무엇을 기준으로 한 값인지
-const basis=c=>c.agent?`피클이 올린 값${c.date?" · "+dayText(c.date):""}`:(RE.seed.docs.priceBasis||"최근 실거래 중앙값");
+const basis=c=>c.live?.med!=null?`국토부 실거래 최근 ${c.live.months}개월 중앙값 · ${c.live.n}건`:c.agent?`피클이 올린 값${c.date?" · "+dayText(c.date):""}`:(RE.seed.docs.priceBasis||"최근 실거래 중앙값");
+const shortDay=iso=>{const [,m,d]=iso.split("-").map(Number);return `${m}/${d}`};
+const tradeText=t=>`${shortDay(t.d)} ${eok(t.p)}${t.f!=null?` · ${t.f}층`:""}`;
+const isNewTrade=t=>t.seen&&t.seen>=addDay(todayISO(),-7)&&!t.x;
+const newTrades=id=>tradesOf(id).filter(isNewTrade);
+const lastOf=(id,key)=>newsOf(id).find(n=>n[key]!=null);
 const signed=n=>(n>0?"+":n<0?"−":"")+eok(Math.abs(n));
 const man=n=>Math.round(n).toLocaleString()+"만";
 const typing=()=>{const a=document.activeElement;return !!(a&&a.closest&&a.closest("#re-root")&&/^(TEXTAREA|INPUT)$/.test(a.tagName))};
@@ -76,9 +100,11 @@ function applyRemote(r){
   RE.seed=r.seed||null;
   RE.user=r.user&&r.user.complexes?r.user:{complexes:{}};
   const a=r.agent||{};RE.agent={briefs:a.briefs||[],news:a.news||[],complexes:a.complexes||[]};
+  const t=r.trades||{};RE.trades={by:t.by||{},synced_at:t.synced_at||null,error:t.error||null};
+  cxCache=null;
   RE.loaded=!!RE.seed;
 }
-const cache=()=>{try{localStorage.setItem(CACHE_KEY,JSON.stringify({seed:RE.seed,user:RE.user,agent:RE.agent}))}catch(e){}};
+const cache=()=>{try{localStorage.setItem(CACHE_KEY,JSON.stringify({seed:RE.seed,user:RE.user,agent:RE.agent,trades:RE.trades}))}catch(e){}};
 async function load(force){
   if(RE.loading||(RE.loaded&&!force))return;
   RE.loading=true;RE.error="";
@@ -124,10 +150,31 @@ async function removeAgentItem(type,id){
   try{
     const r=await apiPost({action:"re_agent_delete",type,id});
     if(r.agent)RE.agent={briefs:r.agent.briefs||[],news:r.agent.news||[],complexes:r.agent.complexes||[]};
-    cache();saved();
+    cxCache=null;cache();saved();
     if(type==="complex"){RE.view="list";RE.detail=""}
   }catch(e){RE.error="지우지 못했어요. 잠시 후 다시 시도해 주세요."}
   draw();
+}
+
+/* ---------- 내 예산선 ---------- */
+// 매매가(억)로 세금·수수료를 어림한다. 전용 85㎡ 이하, 무주택 1주택 취득 기준. 단위는 만원.
+function costsFor(price){
+  const p=price*10000,rate=price<=6?0.01:price<=9?(price*2/3-3)/100:0.03;
+  const relief=price<=12?Math.min(200,p*rate):0; // 생애최초 감면
+  const feeRate=price<0.5?0.006:price<2?0.005:price<9?0.004:price<12?0.005:price<15?0.006:0.007;
+  const tax=p*rate*1.1-relief,fee=p*feeRate*1.1,legal=p*0.0033;
+  return {tax,relief,fee,legal,sum:tax+fee+legal};
+}
+const CALC_DEF={cash:5,loan:4,price:9,etc:1000,rate:4.5,years:30}; // 내 숫자는 조사 내용(plan.calcDefault)과 저장한 값에서 온다
+const calcSaved=()=>({...CALC_DEF,...(RE.seed.docs.plan?.calcDefault||{}),...(RE.user.calc||{})});
+const loanCap=(v,price)=>Math.min(v.loan,6,price*0.7); // 수도권 주담대 6억, 생애최초 집값의 70%
+const cashNeed=(v,price)=>price*10000-loanCap(v,price)*10000+costsFor(price).sum+v.etc;
+// 이 현금·대출로 살 수 있는 가장 비싼 집(억). 세금·수수료·이사비를 빼고 계산한다.
+function maxPrice(v){let lo=1,hi=40;for(let i=0;i<40;i++){const mid=(lo+hi)/2;if(cashNeed(v,mid)<=v.cash*10000)lo=mid;else hi=mid}return Math.floor(lo*20)/20}
+function budgetBadge(c){
+  if(c.p26==null||!RE.seed.docs.plan)return"";
+  const over=c.p26-maxPrice(calcSaved());
+  return over<=0?`<span class="re-gap hit">예산 안</span>`:`<span class="re-gap over">예산 ${eok(over)} 초과</span>`;
 }
 
 /* ---------- 조각 ---------- */
@@ -137,14 +184,17 @@ const leg=(name,min,tr,min2,tr2)=>`${name} ${min}분 <small>${trText(tr)}${min2!
 function commuteLine(c){return c.cm?`${leg("역삼",c.cm[0],c.cm[1],c.cm[2],c.cm[3])}<br>${leg("잠실",c.cm[4],c.cm[5],c.cm[6],c.cm[7])}`:""}
 const subLine=c=>[`${c.gu} ${c.dong}`,ageText(c),c.hh?c.hh.toLocaleString()+"세대":"",c.kind==="jusang"?"주상복합":""].filter(Boolean).map(esc).join(" · ");
 function card(c){
-  const r=rise(c),g=gapText(c),star=ustate(c.id).star,fresh=freshCount(c.id);
+  const r=rise(c),g=gapText(c),star=ustate(c.id).star,fresh=freshCount(c.id),nt=newTrades(c.id).length;
+  const last=c.live?.last,ask=lastOf(c.id,"ask"),lst=lastOf(c.id,"listings");
+  const market=[last?`최근 거래 ${tradeText(last)}`:"",ask?`호가 ${eok(ask.ask)} (${shortDay(ask.date)})`:"",lst?`매물 ${lst.listings}건`:""].filter(Boolean);
   return `<button class="card re-card" data-re-open="${esc(c.id)}">
     <div class="re-card-top">${c.rank?`<span class="re-rank">${c.rank}</span>`:""}<h4>${star?"⭐ ":""}${esc(c.name)}</h4>${pill(c)}</div>
     <div class="re-sub">${subLine(c)}</div>
-    <div class="re-nums"><span class="re-price">${c.area}㎡ ${eok(c.p26)}</span>${r!=null?`<span class="re-rise">2년 +${Math.round(r*100)}%</span>`:""}${g?`<span class="re-gap ${gap(c)<=0?"hit":""}">${g}</span>`:""}</div>
+    <div class="re-nums"><span class="re-price">${c.area}㎡ ${eok(c.p26)}</span>${r!=null?`<span class="re-rise">2년 ${r>=0?"+":"−"}${Math.abs(Math.round(r*100))}%</span>`:""}${g?`<span class="re-gap ${gap(c)<=0?"hit":""}">${g}</span>`:""}${budgetBadge(c)}</div>
+    ${market.length?`<div class="re-market">${esc(market.join(" · "))}</div>`:""}
     ${c.cm?`<div class="re-commute">${commuteLine(c)}</div>`:""}
     <p class="re-one">${esc(c.one)}</p>
-    ${c.agent||fresh?`<div class="re-card-tags">${c.agent?byBadge(c.by):""}${fresh?`<span class="re-fresh">새 소식 ${fresh}</span>`:""}</div>`:""}
+    ${c.agent||fresh||nt?`<div class="re-card-tags">${c.agent?byBadge(c.by):""}${nt?`<span class="re-fresh">새 실거래 ${nt}</span>`:""}${fresh?`<span class="re-fresh">새 소식 ${fresh}</span>`:""}</div>`:""}
   </button>`;
 }
 const list=(title,items,cls="")=>items&&items.length?`<section class="re-block ${cls}"><h3>${title}</h3><ul>${items.map(x=>`<li>${esc(x)}</li>`).join("")}</ul></section>`:"";
@@ -182,12 +232,16 @@ function viewHome(){
   const stars=cs.filter(c=>ustate(c.id).star);
   const ym=todayISO().slice(0,7),next=d.timeline.filter(t=>t.date.slice(0,7)>=ym).slice(0,4);
   const since=addDay(todayISO(),-3),fresh=(RE.agent.news||[]).filter(n=>n.date>=since).sort((a,b)=>b.date.localeCompare(a.date)).slice(0,6);
+  const nts=cs.flatMap(c=>newTrades(c.id).map(t=>({c,t}))).sort((a,b)=>b.t.d.localeCompare(a.t.d)).slice(0,12);
+  const subSince=addDay(todayISO(),-14),subs=briefsDesc().filter(b=>b.date>=subSince).flatMap(b=>(b.items||[]).filter(i=>i.category==="subscription").map(i=>({...i,date:b.date,by:b.by}))).slice(0,6);
   return `${paperToday()}
+  ${nts.length?`<section class="section"><div class="section-title"><h3>🆕 새로 뜬 실거래</h3><span>최근 7일 사이 신고</span></div><div class="re-news">${nts.map(({c,t})=>{const tg=targetOf(c);return `<div class="re-news-item"><div class="re-news-head"><span class="re-kind">실거래</span><span class="re-news-date">계약 ${dayText(t.d)}</span>${t.dg?`<span class="re-tag">직거래</span>`:""}</div><button class="re-link" data-re-open="${esc(c.id)}">${esc(c.name)}${t.n&&t.i?` · ${esc(t.n)}`:""}</button><b>${eok(t.p)} <small>${Math.round(t.a*10)/10}㎡${t.f!=null?` · ${t.f}층`:""}</small></b>${tg?`<div class="re-news-nums">${t.p<=tg?"관심 매수가 이하예요":`관심 매수가보다 ${eok(t.p-tg)} 높음`}</div>`:""}</div>`}).join("")}</div></section>`:""}
+  ${subs.length?`<section class="section"><div class="section-title"><h3>🎟 청약 · 줍줍</h3><span>최근 2주 신문에서</span></div><div class="re-news">${subs.map(i=>`<div class="re-news-item"><div class="re-news-head"><span class="re-kind">청약·줍줍</span><span class="re-news-date">${dayText(i.date)}</span>${byBadge(i.by)}</div><b>${esc(i.title)}</b><p>${esc(i.body)}</p><div class="re-src"><a href="${esc(safeUrl(i.source_url))}" target="_blank" rel="noopener">${esc(i.source_name||host(i.source_url))} ↗</a></div></div>`).join("")}</div></section>`:""}
   ${fresh.length?`<section class="section"><div class="section-title"><h3>🗞 단지 새 소식</h3><span>최근 3일</span></div><div class="re-news">${fresh.map(n=>newsItem(n,true)).join("")}</div></section>`:""}
   <section class="card re-panel"><div class="re-eyebrow">지금 시장 · ${esc(d.asOf)} 기준</div><ul class="re-bullets">${d.market.map(x=>`<li>${esc(x)}</li>`).join("")}</ul></section>
   ${fold("budget","💰 내 예산",`<ul class="re-bullets">${d.budget.lines.map(x=>`<li>${esc(x)}</li>`).join("")}</ul>${d.plan?`<p class="re-note"><button class="re-link" data-re-view="plan" data-re-foldopen="costs">추가로 드는 돈 · 자금 계산기 보기</button></p>`:""}`)}
   ${stars.length?`<section class="section"><div class="section-title"><h3>⭐ 별표한 단지</h3><span>${stars.length}곳</span></div><div class="re-grid">${stars.map(card).join("")}</div></section>`:""}
-  <section class="section"><div class="section-title"><h3>🎯 기회 가격에 가까운 단지</h3><span>실거래 중앙값 − 관심 매수가</span></div><div class="re-grid">${near.map(card).join("")}</div></section>
+  <section class="section"><div class="section-title"><h3>🎯 기회 가격에 가까운 단지</h3><span>최근 실거래 − 관심 매수가</span></div><div class="re-grid">${near.map(card).join("")}</div></section>
   <section class="section"><div class="section-title"><h3>🗓 다가오는 일정</h3><button class="re-link" data-re-view="plan" data-re-foldopen="market">전체 보기</button></div><div class="re-tl">${next.map(tlItem).join("")}</div></section>`;
 }
 
@@ -218,7 +272,7 @@ function viewList(){
     ${chips("status",[["all","전체 상태"],["top","추천"],["watch","관심"],["dip","조정 시 매수"],["holdout","보류·제외"],["agent","피클 추가"]])}
     <div class="re-chips"><button data-re-star class="${RE.starOnly?"on":""}" aria-pressed="${RE.starOnly}">⭐ 별표만</button></div>
   </section>
-  <div class="section-title"><h3>단지 ${shown.length}곳</h3><span>가격은 ${esc(RE.seed.docs.priceBasis||"최근 실거래 중앙값")}</span></div>
+  <div class="section-title"><h3>단지 ${shown.length}곳</h3><span>가격은 국토부 실거래 최근 3개월 중앙값</span></div>
   <div class="re-grid">${shown.length?shown.map(card).join(""):'<div class="empty">조건에 맞는 단지가 없어요.</div>'}</div>`;
 }
 
@@ -246,7 +300,10 @@ function viewDetail(){
   const u=ustate(c.id),L=linksOf(c),r=rise(c),t=targetOf(c),g=gap(c),news=newsOf(c.id);
   const ro=locked(),ask=myAsk(c.id),inCmp=compareIds().includes(c.id);
   const lastAsk=news.find(n=>n.ask!=null),lastListings=news.find(n=>n.listings!=null);
+  const live=c.live,trades=tradesOf(c.id);
   const facts=[
+    live?.last?[`가장 최근 거래 (${dayText(live.last.d)})`,`${eok(live.last.p)}${live.last.f!=null?` · ${live.last.f}층`:""}${live.last.dg?" · 직거래":""}`]:null,
+    budgetBadge(c)?["내 예산",budgetBadge(c)]:null,
     r!=null?["2년 변화 (같은 면적 중앙값)",`${signed(c.p26-c.p24)} (${r>=0?"+":"−"}${Math.abs(Math.round(r*100))}%)`]:null,
     c.peak?["2021년 고점 대비",`${Math.round(c.p26/c.peak*100)}%`]:null,
     c.vol?["거래량 (5~7월 → 8~10월)",`${c.vol[0]}건 → ${c.vol[1]}건`]:null,
@@ -268,8 +325,9 @@ function viewDetail(){
     <div class="re-bigprice">${eok(c.p26)} <small>${esc(c.range||"")}</small></div>
     ${priceBars(c)}
     <dl class="re-facts">${facts.map(([k,v])=>`<div><dt>${k}</dt><dd>${v}</dd></div>`).join("")}</dl>
-    <p class="re-note">가격 기준: ${esc(basis(c))}. 가장 최근 한 건의 거래가가 아니에요. 최신 거래는 <a href="https://rt.molit.go.kr/" target="_blank" rel="noopener">국토부 실거래가</a>나 위의 호갱노노 버튼으로 확인하세요.</p>
+    <p class="re-note">가격 기준: ${esc(basis(c))}.${live?.med!=null?" 취소·직거래는 뺐어요.":live?" 최근 6개월에 거래가 없어서 조사 때 값을 보여줘요.":" 자동 수집 대상이 아닌 단지예요."} 신고는 계약 후 30일 안에 하므로 최근 거래는 늦게 뜰 수 있어요. <a href="https://rt.molit.go.kr/" target="_blank" rel="noopener">국토부 실거래가 ↗</a></p>
   </section>
+  ${tradesCard(c,trades)}
   <section class="card re-panel re-target"><div class="re-eyebrow">🎯 기회 가격</div>
     ${ro?(t?`<div class="re-bigprice">${eok(t)} <small>관심 매수가</small></div>`:""):`<form id="re-targetform" class="re-targetform"><label>관심 매수가 <input type="number" step="0.05" min="0" max="99" name="target" value="${t??""}" inputmode="decimal"> 억</label><button type="submit">저장</button></form>`}
     <p class="re-target-note">${g==null?"관심 매수가를 정하면 최근 실거래와의 차이를 보여줘요.":g<=0?`최근 실거래가 관심 매수가 이하예요 (${eok(-g)} 아래).`:`최근 실거래가 관심 매수가보다 ${eok(g)} 높아요.`}${!ro&&c.target&&t===c.target?" 제안값이라 직접 고칠 수 있어요.":""}${ask!=null&&t?` 내가 본 최저 호가 ${eok(ask)}는 관심 매수가${ask<=t?" 이하예요.":`보다 ${eok(ask-t)} 높아요.`}`:""}</p>
@@ -284,11 +342,19 @@ function viewDetail(){
   ${ro?"":`${visitCard(c)}<section class="card re-panel"><div class="re-eyebrow">📝 내 메모</div><form id="re-memoform"><textarea name="memo" rows="4" maxlength="4000" data-keep="memo-${esc(c.id)}" placeholder="중개사 통화 내용, 생각나는 것 등">${esc(u.memo||"")}</textarea><button type="submit">메모 저장</button></form></section>`}`;
 }
 
+/* ---------- 실거래 목록 ---------- */
+function tradesCard(c,trades){
+  if(!trades.length)return"";
+  const row=t=>`<tr class="${t.x?"gone":""}"><td>${dayText(t.d)}${t.d.slice(0,4)!==todayISO().slice(0,4)?` <small>${t.d.slice(0,4)}</small>`:""}</td><td><b>${eok(t.p)}</b></td><td>${Math.round(t.a*10)/10}㎡${t.f!=null?` · ${t.f}층`:""}${t.n?`<small>${esc(t.n)}</small>`:""}</td><td>${isNewTrade(t)?`<span class="re-fresh">새로 뜸</span>`:""}${t.dg?`<span class="re-tag">직거래</span>`:""}${t.x?`<span class="re-tag">취소</span>`:""}</td></tr>`;
+  const table=list=>`<div class="re-cmp-wrap"><table class="re-table re-trades"><thead><tr><th scope="col">계약일</th><th scope="col">가격</th><th scope="col">면적 · 층</th><th scope="col"></th></tr></thead><tbody>${list.map(row).join("")}</tbody></table></div>`;
+  return `<section class="card re-panel"><div class="re-eyebrow">📋 실거래 (국토부) <small>최근 ${trades.length}건 · ${c.area}㎡ 안팎</small></div>${table(trades.slice(0,8))}${trades.length>8?fold("tr-"+c.id,`이전 거래 ${trades.length-8}건 더 보기`,table(trades.slice(8,60)),false,"re-inner"):""}</section>`;
+}
+
 /* ---------- 내가 본 매물 · 임장 기록 ---------- */
 const field=(label,input)=>`<label>${label}${input}</label>`;
 function listingsCard(c){
   const ls=[...listingsOf(c.id)].sort((a,b)=>(!!a.gone-!!b.gone)||a.price-b.price),t=targetOf(c);
-  const row=l=>`<div class="re-lst ${l.gone?"gone":""}"><div class="re-lst-top"><b>${eok(l.price)}</b>${t?`<span class="re-gap ${l.price<=t?"hit":""}">${l.price<=t?"관심가 이하":`관심가보다 ${eok(l.price-t)} 높음`}</span>`:""}${c.p26?`<span class="re-lst-vs">실거래 중앙값 대비 ${signed(l.price-c.p26)}</span>`:""}${l.gone?`<span class="re-lst-vs">없어진 매물</span>`:""}</div>
+  const row=l=>`<div class="re-lst ${l.gone?"gone":""}"><div class="re-lst-top"><b>${eok(l.price)}</b>${t?`<span class="re-gap ${l.price<=t?"hit":""}">${l.price<=t?"관심가 이하":`관심가보다 ${eok(l.price-t)} 높음`}</span>`:""}${c.p26?`<span class="re-lst-vs">최근 실거래 대비 ${signed(l.price-c.p26)}</span>`:""}${l.gone?`<span class="re-lst-vs">없어진 매물</span>`:""}</div>
     <div class="re-sub">${[l.date?dayText(l.date)+" 확인":"",l.area?l.area+"㎡":"",l.where,l.state,l.agent].filter(Boolean).map(esc).join(" · ")}</div>${l.note?`<p>${esc(l.note)}</p>`:""}
     <div class="re-src">${l.url?`<a href="${esc(safeUrl(l.url))}" target="_blank" rel="noopener">매물 링크 ↗</a>`:""}<button class="re-link" data-re-lgone="${esc(l.id)}">${l.gone?"다시 살리기":"없어짐 표시"}</button><button class="re-del" data-re-ldel="${esc(l.id)}">지우기</button></div></div>`;
   const form=`<form id="re-lstform" class="re-form">
@@ -335,7 +401,9 @@ function viewCompare(){
     ${row("상태",c=>pill(c))}
     ${row("위치",c=>esc(`${c.gu} ${c.dong}`))}
     ${row("준공 · 세대",c=>esc([ageText(c),c.hh?c.hh.toLocaleString()+"세대":"",c.kind==="jusang"?"주상복합":""].filter(Boolean).join(" · ")))}
-    ${row("실거래 중앙값",c=>c.p26!=null?`<b>${c.area}㎡ ${eok(c.p26)}</b><small>${esc(basis(c))}</small>`:"")}
+    ${row("최근 실거래",c=>c.p26!=null?`<b>${c.area}㎡ ${eok(c.p26)}</b><small>${esc(basis(c))}</small>`:"")}
+    ${row("가장 최근 거래",c=>c.live?.last?`${eok(c.live.last.p)}<small>${dayText(c.live.last.d)}${c.live.last.f!=null?` · ${c.live.last.f}층`:""}</small>`:"")}
+    ${row("내 예산",c=>budgetBadge(c))}
     ${row("2024년 하반기",c=>c.p24!=null?eok(c.p24):"")}
     ${row("2년 변화",c=>{const r=rise(c);return r!=null?`${signed(c.p26-c.p24)} (${r>=0?"+":"−"}${Math.abs(Math.round(r*100))}%)`:""})}
     ${row("2021년 고점 대비",c=>c.peak&&c.p26?`${Math.round(c.p26/c.peak*100)}%`:"")}
@@ -351,21 +419,12 @@ function viewCompare(){
     ${row("단점",c=>bullets(c.cons))}
     ${row("한 줄 평",c=>esc(c.one))}
   </tbody></table></div>
-  <p class="re-note">초록 칸은 그 줄에서 가장 유리한 값이에요(관심가에 가장 가까움, 통근 가장 짧음, 호가 가장 낮음). 가격은 실거래 중앙값이라 계약 전에 최신 거래를 다시 확인하세요.</p>`;
+  <p class="re-note">초록 칸은 그 줄에서 가장 유리한 값이에요(관심가에 가장 가까움, 통근 가장 짧음, 호가 가장 낮음). 가격은 국토부 실거래에서 자동으로 받아 온 값이에요.</p>`;
 }
 
 /* ---------- 계획 ---------- */
-// 매매가(억)로 세금·수수료를 어림한다. 전용 85㎡ 이하, 무주택 1주택 취득 기준. 단위는 만원.
-function costsFor(price){
-  const p=price*10000,rate=price<=6?0.01:price<=9?(price*2/3-3)/100:0.03;
-  const relief=price<=12?Math.min(200,p*rate):0; // 생애최초 감면
-  const feeRate=price<0.5?0.006:price<2?0.005:price<9?0.004:price<12?0.005:price<15?0.006:0.007;
-  const tax=p*rate*1.1-relief,fee=p*feeRate*1.1,legal=p*0.0033;
-  return {tax,relief,fee,legal,sum:tax+fee+legal};
-}
-const CALC_DEF={cash:5,loan:4,price:9,etc:1000,rate:4.5,years:30}; // 내 숫자는 조사 내용(plan.calcDefault)과 저장한 값에서 온다
 function calcBox(){
-  const v={...CALC_DEF,...(RE.seed.docs.plan?.calcDefault||{}),...(RE.user.calc||{})};
+  const v=calcSaved();
   const f=(k,l,unit,step)=>`<label>${l}<span><input type="number" name="${k}" value="${v[k]}" step="${step}" min="0" inputmode="decimal"> ${unit}</span></label>`;
   return `<form id="re-calc" class="re-calc"><div class="re-calc-in">${f("cash","가진 현금","억",0.1)}${f("loan","대출","억",0.1)}${f("price","매매가","억",0.05)}${f("etc","이사·수리 등","만원",100)}${f("rate","대출 금리","%",0.1)}${f("years","대출 기간","년",5)}</div><div id="re-calc-out" class="re-calc-out" aria-live="polite"></div>${locked()?"":`<button type="submit">이 값 저장</button>`}</form>`;
 }
@@ -377,10 +436,7 @@ function calcValues(){
 function calcRender(){
   const v=calcValues(),out=document.getElementById("re-calc-out");if(!v||!out)return;
   if(!v.price){out.innerHTML=`<p class="re-note">매매가를 넣어 주세요.</p>`;return}
-  const cap=price=>Math.min(v.loan,6,price*0.7); // 수도권 주담대 6억, 생애최초 집값의 70%
-  const need=price=>price*10000-cap(price)*10000+costsFor(price).sum+v.etc;
-  const c=costsFor(v.price),loan=cap(v.price),total=need(v.price),left=v.cash*10000-total;
-  let lo=1,hi=40;for(let i=0;i<40;i++){const mid=(lo+hi)/2;if(need(mid)<=v.cash*10000)lo=mid;else hi=mid}
+  const c=costsFor(v.price),loan=loanCap(v,v.price),total=cashNeed(v,v.price),left=v.cash*10000-total;
   const r=v.rate/1200,n=v.years*12,pay=loan&&n?(r?loan*10000*r/(1-Math.pow(1+r,-n)):loan*10000/n):0;
   const warn=[v.loan>6?"수도권 주담대는 6억까지라 6억으로 계산했어요.":"",Math.min(v.loan,6)>v.price*0.7?`생애최초도 집값의 70%(${eok(v.price*0.7)})까지라 그만큼만 계산했어요.`:""].filter(Boolean);
   const line=(k,val,note)=>`<div><dt>${k}</dt><dd>${val}${note?`<small>${note}</small>`:""}</dd></div>`;
@@ -391,7 +447,7 @@ function calcRender(){
     ${line("이사 · 수리 등",man(v.etc),"")}
     ${line("필요한 현금",eok(total/10000),`매매가 − 대출 ${eok(loan)} + 부대비용 ${man(c.sum+v.etc)}`)}
     ${line(left>=0?"남는 돈":"모자란 돈",`<b class="${left>=0?"re-ok":"re-short"}">${man(Math.abs(left))}</b>`,`현금 ${eok(v.cash)} 기준`)}
-    ${line("살 수 있는 최대 매매가",`약 ${eok(Math.floor(lo*20)/20)}`,"이 현금·대출을 다 쓸 때")}
+    ${line("살 수 있는 최대 매매가",`약 ${eok(maxPrice(v))}`,"이 현금·대출을 다 쓸 때. 저장하면 단지 카드의 '예산 안/초과' 표시에 쓰여요")}
     ${line("한 달 원리금",pay?man(pay):"-",pay?`${eok(loan)} · ${v.rate}% · ${v.years}년 원리금균등`:"")}
   </dl>${warn.map(w=>`<p class="re-note">${w}</p>`).join("")}<p class="re-note">어림 계산이에요. 실제 세금·수수료·대출 한도는 계약 전에 다시 확인하세요.</p>`;
 }
@@ -443,7 +499,7 @@ function draw(){
   // 저장하지 않은 글(메모 등)은 다시 그려도 남겨 둔다.
   const keep={};document.querySelectorAll("#re-root [data-keep]").forEach(el=>{keep[el.dataset.keep]=el.value});
   const at=RE.syncedAt?new Date(RE.syncedAt).toLocaleTimeString("ko-KR",{hour:"2-digit",minute:"2-digit"}):"";
-  app.innerHTML=`<div id="re-root">${subnav()}${RE.error?`<div class="re-error" role="alert">${esc(RE.error)}</div>`:""}${body}<div class="re-sync">${at?`${at}에 불러옴`:"저장해 둔 내용을 보여주는 중"} · <button class="re-link" data-re-reload>다시 불러오기</button></div></div>`;
+  app.innerHTML=`<div id="re-root">${subnav()}${RE.error?`<div class="re-error" role="alert">${esc(RE.error)}</div>`:""}${body}<div class="re-sync">${RE.trades.synced_at?`실거래 ${new Date(RE.trades.synced_at).toLocaleString("ko-KR",{month:"numeric",day:"numeric",hour:"2-digit",minute:"2-digit"})} 수집${RE.trades.error?" (일부 실패)":""}`:RE.trades.error?"실거래 수집 실패":"실거래 수집 전"} · ${at?`${at}에 불러옴`:"저장해 둔 내용을 보여주는 중"} · <button class="re-link" data-re-reload>다시 불러오기</button>${locked()?"":` · <button class="re-link" data-re-rtsync>실거래 지금 받기</button>`}</div></div>`;
   app.querySelectorAll("[data-keep]").forEach(el=>{if(el.dataset.keep in keep)el.value=keep[el.dataset.keep]});
   bind();
 }
@@ -453,6 +509,11 @@ function bind(){
   root.querySelectorAll("[data-re-view]").forEach(b=>b.onclick=()=>{if(b.dataset.reFoldopen)RE.fold[b.dataset.reFoldopen]=true;go(b.dataset.reView)});
   root.querySelectorAll("[data-re-fold]").forEach(d=>d.addEventListener("toggle",()=>{RE.fold[d.dataset.reFold]=d.open}));
   root.querySelector("[data-re-reload]").onclick=()=>{RE.loading=false;setStatus("불러오는 중","");load(true).then(()=>setStatus(RE.error?"연결 확인 필요":"최신 상태",RE.error?"":"ok"))};
+  root.querySelector("[data-re-rtsync]")?.addEventListener("click",async e=>{
+    e.currentTarget.disabled=true;setStatus("실거래 받는 중","");
+    try{const r=await apiPost({action:"re_trades_sync"});if(!r.ok)throw new Error(r.error||"FAIL");RE.loading=false;await load(true);setStatus(r.added?`새 실거래 ${r.added}건`:"새 실거래 없음","ok")}
+    catch(x){RE.error="실거래를 받지 못했어요. 잠시 후 다시 시도해 주세요.";setStatus("연결 확인 필요","");draw()}
+  });
   root.querySelector("[data-re-jump]")?.addEventListener("click",e=>document.getElementById(e.currentTarget.dataset.reJump)?.scrollIntoView({behavior:"smooth",block:"start"}));
   // 상태 · 비교
   root.querySelector("[data-re-status]")?.addEventListener("change",async e=>{await patch(RE.detail,{status:e.target.value});draw()});

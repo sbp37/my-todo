@@ -5,6 +5,7 @@
 //   user.json  — 내가 고친 값(메모·관심 매수가·별표·상태·링크·내가 본 매물·임장 기록, 전체 메모·비교 목록·자금 계산 값)
 //   agent.json — 에이전트(피클 등)가 올린 신문·단지별 소식·새 단지. 쌓기만 하고, 지우는 건 주인 키만 된다.
 //   pin.json   — 가족 키 비밀번호를 틀린 횟수(lock.ts)
+//   trades.json, config.json — 국토부 실거래 수집 결과와 인증키(rt.ts)
 import type { SupabaseClient } from 'npm:@supabase/supabase-js@2'
 
 const BUCKET = 're-data'
@@ -329,6 +330,12 @@ export async function realestateGet(db: SupabaseClient, locked = false) {
     mine = { complexes, compare: user.compare, updated_at: user.updated_at }
   }
   return { realestate: true, seed: seed.version ? seed : null, user: mine, agent }
+}
+
+// 실거래 수집(rt.ts)이 쓰는 단지 목록. rt: { code: 시군구 코드, seq: 국토부 단지 일련번호들, names: 이름에 들어가는 말 }
+export async function rtTargets(db: SupabaseClient) {
+  const [seed, agent] = await Promise.all([loadSeed(db), readAgent(db)])
+  return [...seed.complexes, ...agent.complexes].map(c => ({ id: c.id, name: c.name, gu: c.gu, dong: c.dong, area: c.area, kind: c.kind, rt: c.rt }))
 }
 
 // 에이전트가 글을 올리기 전에 읽는 안내: 단지 id, 쓸 수 있는 분류, 최근에 올린 것.
