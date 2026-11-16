@@ -135,16 +135,24 @@ Vercel과 GitHub는 자동 배포 링크가 설정되어 있지 않을 수 있�
 
 ## 🏠 부동산 탭
 
-- 탭: 사이트 상단 `🏠 부동산`. 요약 / 단지(정렬·필터) / 단지 상세 / 일정 / 분양권·기준.
-- 코드: `subin-assistant-site/realestate.js`, `realestate.css` (기존 파일은 탭 버튼·로드 태그·`render()` 분기만 수정). `realestate.js`는 `app-render.js`보다 먼저 로드한다.
+- 사이트를 열면 항상 이 탭부터 보인다. 하위 화면: 요약(오늘의 부동산 신문·시장·내 예산) / 신문 / 단지(정렬·필터) / 단지 상세 / 비교(최대 4곳) / 계획(단계별 할 일·토허제·추가 비용·자금 계산기·주의점·팁·시장 일정·내 메모) / 분양권·기준.
+- 코드: `subin-assistant-site/realestate.js`, `realestate.css`, `lock.js` (기존 파일은 탭 버튼·로드 태그·`render()` 분기·`pinHeader`만 수정). 로드 순서는 `app-base.js` → `lock.js` → `realestate.js` → `app-render.js`.
 - 버튼 속성은 `data-re-*`만 쓴다. 상태 표시 클래스는 `s-top`처럼 `s-`를 붙인다(`style.css`의 `.top`은 상단 헤더라 겹치면 깨진다).
-- API: `GET ?resource=realestate` → `{seed, user}`, `POST action=re_patch {id, patch}` (patch: `memo`, `target`(억), `star`, `status`, `links{naver,hogang,plan,road}`). 로직은 `supabase/functions/assistant-api/realestate.ts`.
-- 조사 내용(단지·시장 요약·일정)은 `realestate_seed.ts`의 `SEED`에 있고 **배포본에만 둔다**. 예산·관심 단지가 드러나는 개인 조사 내용이라 저장소에 커밋하지 않는다(`index.ts`와 같은 취급). 내용을 고치려면 배포본을 내려받아 `SEED`를 고쳐 다시 배포한다.
-- `GET ?resource=re_version`은 인증 없이 `{version, complexes, sha256}`만 돌려준다. 배포 뒤 `sha256`이 로컬 `JSON.stringify(SEED)`의 해시와 같은지로 내용이 그대로 올라갔는지 확인한다.
-- 내가 고친 값(메모·관심 매수가·별표·링크)은 비공개 Storage 버킷 `re-data`의 `user.json`에 저장한다(버킷은 첫 저장 때 만든다). 조사 내용을 다시 배포해도 지워지지 않는다.
-- 단지 필드: `cm`은 `[역삼 최소시간, 환승, 역삼 최소환승, 환승, 잠실 최소시간, 환승, 잠실 최소환승, 환승]`(없으면 null), 가격은 억 단위(`p24` 2024년 7~11월, `p26` 최근 실거래, `peak` 2021년 고점, `target` 관심 매수가 제안값), `status`는 `top|watch|dip|hold|out|presale`.
+- 서버 로직: `supabase/functions/assistant-api/realestate.ts`, `lock.ts`. 데이터는 비공개 Storage 버킷 `re-data`의 JSON 파일이다(버킷은 첫 저장 때 만든다).
+  - `seed.json` — 조사 내용(단지·시장 요약·계획·일정). 예산·관심 단지가 드러나는 개인 조사 내용이라 **저장소에 커밋하지 않는다.** 고칠 때는 관리용 키로 `POST action=re_seed_put {seed}` 한다(직전 내용은 `seed.prev.json`에 남는다). 함수를 다시 배포할 필요가 없다.
+  - `user.json` — 내가 고친 값. 단지별 `memo`, `target`(억), `star`, `status`, `links`, `listings`(내가 본 매물), `visit`(임장 기록) + 전체 `note`, `compare`, `calc`.
+  - `agent.json` — 에이전트(피클)가 올린 신문·단지 소식·새 단지. 쌓기만 하고 지우는 건 주인만 된다.
+  - `pin.json` — 가족 비밀번호 틀린 횟수.
+- API: `GET ?resource=realestate` → `{seed, user, agent}`. `POST action=re_patch {id, patch}`, `re_my_put {note?, compare?, calc?}`, `re_brief_add`, `re_news_add`, `re_complex_put`, `re_agent_delete`. 에이전트용 설명은 `PICKLE.md`.
+- `GET ?resource=re_version`은 인증 없이 `{version, complexes, sha256}`만 돌려준다. `re_seed_put` 뒤 `sha256`이 올린 내용의 `JSON.stringify` 해시와 같은지로 확인한다.
+- 키는 네 가지이고 해시만 `index.ts`(배포본에만 있음)에 둔다.
+  - 주인 키: 전부 가능.
+  - 에이전트 키(`pk_…`): 주인과 같되 올린 글 지우기(`re_agent_delete`)와 `re_my_put`은 안 된다.
+  - 가족 키(`fam_…`): 부동산 읽기만 된다. 이때 서버가 개인 기록(메모·본 매물·임장 기록·자금 계산 값)을 빼고 준다. `x-assistant-pin` 헤더의 비밀번호가 맞으면 주인과 같아진다(5번 틀리면 10분 막힘). 공유 주소는 `https://subin-assistant.vercel.app/#key=<가족 키>`.
+  - 관리용 키(`mt_…`): `re_seed_put`만 된다.
+- 단지 필드: `cm`은 `[역삼 최소시간, 환승, 역삼 최소환승, 환승, 잠실 최소시간, 환승, 잠실 최소환승, 환승]`(없으면 null), 가격은 억 단위(`p24` 2024년 하반기 중앙값, `p26` 최근 실거래 중앙값, `peak` 2021년 고점, `target` 관심 매수가 제안값), `status`는 `top|watch|dip|hold|out|presale`. `p26`의 기준 기간은 `docs.priceBasis`에 적고 화면에 그대로 보여준다.
 - 평면도·사진은 저작권 때문에 사이트에 넣지 않고 링크로 연다(네이버부동산·호갱노노·평면도 검색·카카오맵). 단지 페이지 주소를 "링크 고치기"에 넣으면 그 주소로 바로 열린다.
-- 네이버부동산·호갱노노·당근부동산은 자동 수집을 막아 두었으므로 긁어 오지 않는다. 실거래 자동 갱신은 국토부 공식 API(공공데이터포털)로 만든다(2단계, Supabase secret `DATA_GO_KR_KEY`).
+- 네이버부동산·호갱노노·당근부동산은 자동 수집을 막아 두었으므로 긁어 오지 않는다. 실거래 자동 갱신은 국토부 공식 API(공공데이터포털)로 만든다(다음 단계, 키는 저장소에 두지 않는다).
 
 ## 캘린더
 
