@@ -72,6 +72,26 @@ function linksOf(c){
 // 에이전트가 준 주소는 https만 연다.
 const safeUrl=u=>/^https:\/\//.test(u||"")?u:"#";
 const host=u=>{try{return new URL(u).hostname.replace(/^www\./,"")}catch(e){return"출처"}};
+// 단지 외관 사진·평면도(complex-media.js). 없으면 그 영역을 그리지 않는다.
+const mediaOf=id=>(window.RE_MEDIA||{})[id]||null;
+function mediaModal(){
+  let d=document.getElementById("re-media-modal");
+  if(!d){
+    d=document.createElement("dialog");d.id="re-media-modal";d.className="re-modal";
+    d.innerHTML=`<form method="dialog"><button class="re-modal-close" value="close" aria-label="닫기">✕</button><img alt="단지 사진 크게 보기"><p class="re-modal-cap"></p></form>`;
+    d.addEventListener("click",e=>{if(e.target===d)d.close()});
+    document.body.appendChild(d);
+  }
+  return d;
+}
+function openMedia(src,cap){
+  const d=mediaModal(),img=d.querySelector("img");
+  img.src=src;img.alt=cap||"단지 사진";
+  d.querySelector(".re-modal-cap").textContent=cap||"";
+  if(!d.open)d.showModal();
+}
+// 사진이 깨지면(파일 없음) 그 버튼/칸째로 지워 깨진 아이콘이 남지 않게 한다.
+const brokenImg="onerror=\"this.closest('.re-hero-photo,.re-plan')?.remove()\"";
 const addDay=(iso,n)=>{const d=new Date(iso+"T00:00:00Z");d.setUTCDate(d.getUTCDate()+n);return d.toISOString().slice(0,10)};
 const dayText=iso=>{const [,m,d]=iso.split("-").map(Number);return `${m}월 ${d}일 (${"일월화수목금토"[new Date(iso+"T00:00:00Z").getUTCDay()]})`};
 const byBadge=by=>`<span class="re-by">${esc(BY[by]||BY.pickle)}</span>`;
@@ -354,7 +374,7 @@ function newsItem(n,withName){
 function viewDetail(){
   const c=findComplex(RE.detail);
   if(!c){RE.view="list";return viewList()}
-  const u=ustate(c.id),L=linksOf(c),r=rise(c),t=targetOf(c),g=gap(c),news=newsOf(c.id);
+  const u=ustate(c.id),L=linksOf(c),r=rise(c),t=targetOf(c),g=gap(c),news=newsOf(c.id),m=mediaOf(c.id);
   const ro=locked(),ask=myAsk(c.id),inCmp=compareIds().includes(c.id);
   const lastListings=news.find(n=>n.listings!=null);
   const live=c.live,trades=tradesOf(c.id);
@@ -369,13 +389,14 @@ function viewDetail(){
   ].filter(Boolean);
   const cmRow=(label,min,tr,min2,tr2)=>`<div class="re-cm-row"><b>${label}</b><span>최소시간 ${min}분 · ${trText(tr)}</span>${min2!=null?`<span>최소환승 ${min2}분 · ${trText(tr2)}</span>`:""}</div>`;
   return `<div class="re-detail-head"><button class="re-back" data-re-view="list">‹ 목록</button>${ro?"":`<div class="re-head-actions"><label class="re-status">상태 <select data-re-status aria-label="이 단지의 상태">${Object.entries(STATUS).map(([k,v])=>`<option value="${k}" ${statusOf(c)===k?"selected":""}>${v.label}</option>`).join("")}</select></label><button class="re-star ${inCmp?"on":""}" data-re-cmp="${esc(c.id)}" aria-pressed="${inCmp}">${inCmp?"⚖️ 비교 중":"⚖️ 비교에 담기"}</button><button class="re-star ${u.star?"on":""}" data-re-starone="${esc(c.id)}" aria-pressed="${!!u.star}">${u.star?"⭐ 별표함":"☆ 별표"}</button></div>`}</div>
-  <section class="card re-panel re-hero"><div class="re-card-top">${c.rank?`<span class="re-rank">${c.rank}</span>`:""}<h2>${esc(c.name)}</h2>${pill(c)}</div>
+  <section class="card re-panel re-hero">${m&&m.photo?`<button class="re-hero-photo" type="button" data-re-media="${esc(m.photo)}" data-re-media-cap="${esc(c.name)} 단지 외관${m.photoNote?" · "+m.photoNote:""}"><img src="${esc(m.photo)}" alt="${esc(c.name)} 단지 외관" loading="lazy" ${brokenImg}><span class="re-hero-cap">📷 ${esc(c.name)} ${esc(m.photoNote||"단지 외관")}</span></button>`:""}<div class="re-card-top">${c.rank?`<span class="re-rank">${c.rank}</span>`:""}<h2>${esc(c.name)}</h2>${pill(c)}</div>
     <div class="re-sub">${esc(c.region)} ${subLine(c)}${c.kind!=="jusang"&&KIND[c.kind]?" · "+KIND[c.kind]:""}</div>
     <p class="re-one">${esc(c.one)}</p>
     ${c.agent?`<div class="re-src">${byBadge(c.by)}<span>${dayText(c.date)}</span><a href="${esc(safeUrl(c.source_url))}" target="_blank" rel="noopener">${esc(host(c.source_url))} ↗</a><button class="re-del" data-re-del="complex" data-re-id="${esc(c.id)}">이 단지 지우기</button></div>`:""}
     <div class="re-links"><a href="${esc(L.naver)}" target="_blank" rel="noopener">네이버부동산</a><a href="${esc(L.hogang)}" target="_blank" rel="noopener">호갱노노</a><a href="${esc(L.plan)}" target="_blank" rel="noopener">평면도</a><a href="${esc(L.road)}" target="_blank" rel="noopener">지도·로드뷰</a>${ro?"":`<button class="re-link" data-re-editlinks>${RE.editLinks?"닫기":"링크 고치기"}</button>`}</div>
     ${RE.editLinks?`<form class="re-linkform" id="re-linkform"><p>검색 화면으로 열리는 링크는 단지 페이지 주소를 붙여 넣으면 다음부터 바로 열려요. 비우면 기본 검색 링크를 써요.</p>${[["naver","네이버부동산"],["hogang","호갱노노"],["plan","평면도"],["road","지도·로드뷰"]].map(([k,l])=>`<label>${l}<input type="url" name="${k}" value="${esc((u.links||{})[k]||"")}" placeholder="https://"></label>`).join("")}<button type="submit" class="primary">링크 저장</button></form>`:""}
   </section>
+  ${m&&m.plans&&m.plans.length?`<section class="card re-panel re-plans-panel"><div class="re-eyebrow">📐 평면도 <small>${esc(c.area)}㎡ 기준 · 누르면 크게 볼 수 있어요</small></div><div class="re-plans">${m.plans.map(p=>`<button class="re-plan" type="button" data-re-media="${esc(p.src)}" data-re-media-cap="${esc(c.name)} · ${esc(p.label||"평면도")}"><img src="${esc(p.src)}" alt="${esc(c.name)} 평면도" loading="lazy" ${brokenImg}><span class="re-plan-label">${esc(p.label||"평면도")}</span>${p.verified===false?`<span class="re-plan-warn">타입 확인 필요</span>`:""}</button>`).join("")}</div><p class="re-note">평면도는 단지 타입별 도면을 옮겨 온 이미지예요. 실제 계약 전에는 등기·건축물대장 도면과 다시 맞춰 보세요.</p></section>`:""}
   <section class="card re-panel"><div class="re-eyebrow">가격 · ${c.area}㎡</div>
     ${(()=>{const a=askInfo(c),b=budgetOf(c);return `<div class="re-pricepair"><div><span class="re-pp-label">실거래</span><div class="re-bigprice">${eok(c.p26)} <small>${esc(live?.med!=null?`최근 ${live.months}개월 중앙값 · ${live.n}건`:c.range||"")}</small></div></div>${a?`<div class="${a.old||a.diff==null?"":a.diff<=-0.2?"down":a.diff>=0.5?"up":""}"><span class="re-pp-label">최저 호가</span><div class="re-bigprice">${eok(a.ask)} <small>${dayText(a.date)} 피클 확인${a.old?" · 30일 넘음":""}</small></div>${a.diff!=null?`<div class="re-pp-diff">실거래 대비 <b>${a.diff===0?"같음":signed(a.diff)}</b>${askVerdict(a.old?null:a.diff)?` · ${askVerdict(a.old?null:a.diff)}`:""}</div>`:""}</div>`:`<div class="re-pp-empty"><span class="re-pp-label">최저 호가</span><p>아직 없어요. 피클이 호가를 올리면 여기에 실거래와 나란히 보여요.</p></div>`}</div>${b?`<div class="re-budgetline">${budgetBadge(c)}<span>${b.by} ${eok(b.price)} 기준 · 내 예산선 ${eok(b.max)} (현금+대출, 계획 → 자금 계산기)</span></div>`:""}`})()}
     ${priceBars(c)}
@@ -592,6 +613,7 @@ function bind(){
   root.querySelector("#re-noteform")?.addEventListener("submit",async e=>{e.preventDefault();await myPut({note:e.target.note.value});draw()});
   const calc=root.querySelector("#re-calc");
   if(calc){calcRender();calc.addEventListener("input",calcRender);calc.addEventListener("submit",async e=>{e.preventDefault();const v=calcValues();if(await myPut({calc:v}))calcRender();else draw()})}
+  root.querySelectorAll("[data-re-media]").forEach(b=>b.onclick=e=>{e.preventDefault();openMedia(b.dataset.reMedia,b.dataset.reMediaCap)});
   root.querySelectorAll("[data-re-open]").forEach(b=>b.onclick=()=>go("detail",b.dataset.reOpen));
   root.querySelectorAll("[data-re-del]").forEach(b=>b.onclick=e=>{e.stopPropagation();removeAgentItem(b.dataset.reDel,b.dataset.reId)});
   root.querySelectorAll("[data-re-filter]").forEach(b=>b.onclick=()=>{RE[b.dataset.reFilter]=b.dataset.reValue;saveUI();draw()});
