@@ -217,3 +217,14 @@ body[data-tab="realestate"]{--bg:#f2f4f1}
 .re-controls{min-width:0}
 .re-sort{display:flex;flex-wrap:wrap;align-items:center;gap:6px;min-width:0}
 .re-sort select{margin-left:0;min-width:0;max-width:100%;flex:1 1 180px}
+
+/* 실거래 · 예산선 */
+.re-market{margin-top:6px;font-size:var(--fs-sm);color:var(--ink-2);font-variant-numeric:tabular-nums}
+.re-gap.over{background:var(--paper-2);color:var(--muted);border-color:var(--line)}
+.re-tag{display:inline-block;border-radius:6px;padding:1px 7px;font-size:var(--fs-xs);font-weight:700;background:var(--paper-2);color:var(--muted);border:1px solid var(--line)}
+.re-trades td small{display:block;font-size:var(--fs-xs);color:var(--muted);white-space:normal}
+.re-trades td:last-child{white-space:normal}
+.re-trades td:last-child>*{margin-right:4px}
+.re-trades tr.gone td:not(:last-child){text-decoration:line-through;color:var(--muted)}
+.re-news-item b small{font-size:var(--fs-sm);font-weight:500;color:var(--muted)}
+.re-facts dd .re-gap{display:inline-block;font-size:var(--fs-sm)}

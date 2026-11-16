@@ -152,6 +152,13 @@ curl -sS "$API?resource=re_agent" -H "x-assistant-key: $PICKLE_KEY"
 - 목록 5개(`cat`·`pros`·`cons`·`tips`·`checks`)는 각각 8개, 한 줄 200자까지.
 - 어떤 단지를 넣고 빼는지는 `seed.docs.rules`와 `seed.docs.agentGuide`의 기준을 따른다.
 
+## 실거래는 올리지 않아도 된다
+
+국토부 실거래가는 사이트가 공식 API로 6시간마다 자동으로 받는다(`GET ?resource=realestate`의 `trades`).
+피클은 자동으로 받을 수 없는 것에 집중한다: **호가(`ask`), 매물 수(`listings`), 청약·줍줍 일정(`subscription`), 호재·악재, 실거주 후기.**
+특히 호가와 매물 수는 단지 카드와 비교 화면에 바로 보이므로, 관심 단지는 주 1~2회 `kind: "ask"`와 `kind: "listings"`로 숫자를 함께 올린다.
+청약·줍줍은 신문(`re_brief_add`)의 `subscription` 분류로 올리면 첫 화면 "청약 · 줍줍" 칸에 2주 동안 따로 모여 보인다.
+
 ## 할 수 없는 것
 
 - 올린 글 지우기, 기존 조사 단지 내용 고치기, 사이트 주인의 메모·비교 목록·자금 계산 값 바꾸기.
