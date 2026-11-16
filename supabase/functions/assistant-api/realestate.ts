@@ -22,7 +22,7 @@ const KINDS = ['apt', 'jusang', 'presale']
 const MAX_BRIEFS = 400, MAX_NEWS = 3000, MAX_COMPLEXES = 200
 
 const VISIT_RATES = ['slope', 'parking', 'noise', 'shops', 'manage', 'home', 'overall']
-const CALC_KEYS = ['cash', 'loan', 'price', 'repair', 'rate', 'years', 'etc']
+const CALC_KEYS = ['cash', 'loan', 'price', 'repair', 'rate', 'years', 'etc', 'card']
 
 export type Role = 'owner' | 'agent' | 'maint'
 type Row = Record<string, unknown>
