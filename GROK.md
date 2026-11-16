@@ -136,7 +136,8 @@ Vercel과 GitHub는 자동 배포 링크가 설정되어 있지 않을 수 있�
 ## 🏠 부동산 탭
 
 - 사이트를 열면 항상 이 탭부터 보인다. 하위 화면: 요약(오늘의 부동산 신문·시장·내 예산) / 신문 / 단지(정렬·필터) / 단지 상세 / 비교(최대 4곳) / 계획(단계별 할 일·토허제·추가 비용·자금 계산기·주의점·팁·시장 일정·내 메모) / 분양권·기준.
-- 코드: `subin-assistant-site/realestate.js`, `realestate.css`, `lock.js` (기존 파일은 탭 버튼·로드 태그·`render()` 분기·`pinHeader`만 수정). 로드 순서는 `app-base.js` → `lock.js` → `realestate.js` → `app-render.js`.
+- 코드: `subin-assistant-site/realestate.js`, `realestate.css`, `lock.js`, `nav.js` (기존 파일은 탭 버튼·로드 태그·`render()` 분기·`pinHeader`만 수정). 로드 순서는 `app-base.js` → `lock.js` → `realestate.js` → `app-render.js` → `tracker.js` → `nav.js`.
+- 뒤로 가기(`nav.js`): 탭 바꾸기, 부동산 화면 이동(`realestate.js`의 `go()`), 트래커 열기를 `history.pushState`로 쌓고 `popstate`에서 되돌린다. 스크롤 위치도 기록에 같이 둔다. 화면을 옮기는 새 기능을 만들면 `go()`를 쓰거나 `window.navPush()`를 불러야 휴대폰 뒤로 가기가 맞게 동작한다.
 - 버튼 속성은 `data-re-*`만 쓴다. 상태 표시 클래스는 `s-top`처럼 `s-`를 붙인다(`style.css`의 `.top`은 상단 헤더라 겹치면 깨진다).
 - 서버 로직: `supabase/functions/assistant-api/realestate.ts`, `lock.ts`. 데이터는 비공개 Storage 버킷 `re-data`의 JSON 파일이다(버킷은 첫 저장 때 만든다).
   - `seed.json` — 조사 내용(단지·시장 요약·계획·일정). 예산·관심 단지가 드러나는 개인 조사 내용이라 **저장소에 커밋하지 않는다.** 고칠 때는 관리용 키로 `POST action=re_seed_put {seed}` 한다(직전 내용은 `seed.prev.json`에 남는다). 함수를 다시 배포할 필요가 없다.

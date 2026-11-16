@@ -558,13 +558,19 @@ function draw(){
   app.querySelectorAll("[data-keep]").forEach(el=>{if(el.dataset.keep in keep)el.value=keep[el.dataset.keep]});
   bind();
 }
-function go(view,id){RE.view=view;if(id)RE.detail=id;RE.editLinks=false;RE.error="";saveUI();draw();window.scrollTo(0,0)}
+// 화면을 옮길 때마다 브라우저 기록에 남겨서, 휴대폰에서 뒤로 가기(밀기)를 하면 앞 화면으로 돌아오게 한다(nav.js).
+function go(view,id){window.navRemember?.();RE.view=view;if(id)RE.detail=id;RE.editLinks=false;RE.error="";saveUI();draw();window.scrollTo(0,0);window.navPush?.()}
+window.reNav={
+  get:()=>({view:RE.view,detail:RE.detail,status:RE.status}),
+  set:v=>{if(!v)return;RE.view=v.view||"home";RE.detail=v.detail||"";if(v.status)RE.status=v.status;RE.editLinks=false;RE.error="";saveUI()},
+  draw:()=>draw()
+};
 function bind(){
   const root=document.getElementById("re-root");
   root.querySelectorAll("[data-re-view]").forEach(b=>b.onclick=()=>{if(b.dataset.reFoldopen)RE.fold[b.dataset.reFoldopen]=true;go(b.dataset.reView)});
   root.querySelectorAll("[data-re-fold]").forEach(d=>d.addEventListener("toggle",()=>{RE.fold[d.dataset.reFold]=d.open}));
   root.querySelector("[data-re-reload]").onclick=()=>{RE.loading=false;setStatus("불러오는 중","");load(true).then(()=>setStatus(RE.error?"연결 확인 필요":"최신 상태",RE.error?"":"ok"))};
-  root.querySelector("[data-re-shownew]")?.addEventListener("click",()=>{RE.status="new";RE.region="all";RE.kind="all";RE.starOnly=false;go("list")});
+  root.querySelector("[data-re-shownew]")?.addEventListener("click",()=>{window.navRemember?.();RE.status="new";RE.region="all";RE.kind="all";RE.starOnly=false;go("list")});
   root.querySelector("[data-re-rtsync]")?.addEventListener("click",async e=>{
     e.currentTarget.disabled=true;setStatus("실거래 받는 중","");
     try{const r=await apiPost({action:"re_trades_sync"});if(!r.ok)throw new Error(r.error||"FAIL");RE.loading=false;await load(true);setStatus(r.added?`새 실거래 ${r.added}건`:"새 실거래 없음","ok")}
