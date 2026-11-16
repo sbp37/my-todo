@@ -172,10 +172,32 @@ const loanCap=(v,price)=>Math.min(v.loan,6,price*0.7); // 수도권 주담대 6�
 const cashNeed=(v,price)=>{const c=costsFor(price);return price*10000-loanCap(v,price)*10000+c.sum-(v.card>0?c.tax:0)+v.etc};
 // 이 현금·대출로 살 수 있는 가장 비싼 집(억). 세금·수수료·이사비를 빼고 계산한다.
 function maxPrice(v){let lo=1,hi=40;for(let i=0;i<40;i++){const mid=(lo+hi)/2;if(cashNeed(v,mid)<=v.cash*10000)lo=mid;else hi=mid}return Math.floor(lo*20)/20}
+// 조정 대기: 지금은 예산을 넘지만 예산선 + 2.5억 안쪽이라, 값이 내려오면 살 수 있는 단지. "조정 시 매수"로 둔 단지도 포함한다.
+const WAIT_BAND=2.5;
+function waitList(){
+  const max=maxPrice(calcSaved());
+  return complexes().filter(c=>c.p26!=null&&c.kind!=="presale"&&!["out","hold"].includes(statusOf(c))&&(statusOf(c)==="dip"||(c.p26>max&&c.p26<=max+WAIT_BAND)))
+    .map(c=>{const t=targetOf(c),line=Math.min(t??Infinity,max),drop=c.p26-line;return {c,max,line,drop,pct:drop>0?drop/c.p26:0}})
+    .sort((a,b)=>a.pct-b.pct);
+}
+// 조정 신호: 최근 45일 안에 계약된 거래 중 살 수 있는 선(관심 매수가와 예산선 중 낮은 쪽) 이하인 것
+function dipSignals(){
+  const since=addDay(todayISO(),-45);
+  return waitList().flatMap(w=>tradesOf(w.c.id).filter(t=>!t.x&&!t.dg&&!t.i&&t.d>=since&&t.p<=w.line).map(t=>({...w,t}))).sort((a,b)=>b.t.d.localeCompare(a.t.d));
+}
 function budgetBadge(c){
   if(c.p26==null||!RE.seed.docs.plan)return"";
   const over=c.p26-maxPrice(calcSaved());
   return over<=0?`<span class="re-gap hit">예산 안</span>`:`<span class="re-gap over">예산 ${eok(over)} 초과</span>`;
+}
+
+function waitRow(w){
+  const {c,line,drop,pct}=w,lows=tradesOf(c.id).filter(t=>!t.x&&!t.dg&&!t.i&&t.d>=addDay(todayISO(),-92)).map(t=>t.p),low=lows.length?Math.min(...lows):null;
+  const width=Math.max(0,Math.min(100,(1-pct/0.2)*100)); // 20% 빠져야 하면 0, 바로 사면 100
+  return `<button class="re-wait-row" data-re-open="${esc(c.id)}"><div class="re-wait-top"><b>${esc(c.name)}</b><span>${c.area}㎡</span>${pill(c)}</div>
+    <div class="re-wait-nums"><span>지금 <b>${eok(c.p26)}</b></span><span>살 수 있는 값 <b>${eok(line)}</b></span><span class="re-wait-need">${drop>0?`${eok(drop)} (${Math.round(pct*100)}%) 내려야`:"지금 살 수 있음"}</span></div>
+    <div class="re-wait-bar" role="img" aria-label="필요한 하락 ${Math.round(pct*100)}%"><i style="width:${width.toFixed(0)}%"></i></div>
+    ${low!=null||c.peak?`<div class="re-sub">${[low!=null?`최근 3개월 최저 거래 ${eok(low)}`:"",c.peak?`2021년 고점 ${eok(c.peak)}`:""].filter(Boolean).join(" · ")}</div>`:""}</button>`;
 }
 
 /* ---------- 조각 ---------- */
@@ -235,13 +257,16 @@ function viewHome(){
   const since=addDay(todayISO(),-3),fresh=(RE.agent.news||[]).filter(n=>n.date>=since).sort((a,b)=>b.date.localeCompare(a.date)).slice(0,6);
   const nts=cs.flatMap(c=>newTrades(c.id).map(t=>({c,t}))).sort((a,b)=>b.t.d.localeCompare(a.t.d)).slice(0,12);
   const subSince=addDay(todayISO(),-14),subs=briefsDesc().filter(b=>b.date>=subSince).flatMap(b=>(b.items||[]).filter(i=>i.category==="subscription").map(i=>({...i,date:b.date,by:b.by}))).slice(0,6);
-  return `${paperToday()}
+  const sig=dipSignals(),wait=waitList();
+  return `${sig.length?`<section class="section"><div class="section-title"><h3>🔔 조정 신호</h3><span>살 수 있는 값 이하 거래 · 최근 45일</span></div><div class="re-news">${sig.slice(0,8).map(({c,t,line})=>`<div class="re-news-item re-signal"><div class="re-news-head"><span class="re-kind">실거래</span><span class="re-news-date">계약 ${dayText(t.d)}</span></div><button class="re-link" data-re-open="${esc(c.id)}">${esc(c.name)}</button><b>${eok(t.p)} <small>${Math.round(t.a*10)/10}㎡${t.f!=null?` · ${t.f}층`:""}</small></b><div class="re-news-nums">살 수 있는 값 ${eok(line)}보다 ${t.p<line?eok(line-t.p)+" 낮아요":"낮거나 같아요"}. 비슷한 매물이 있는지 바로 확인해 보세요.</div></div>`).join("")}</div></section>`:""}
+  ${paperToday()}
   ${nts.length?`<section class="section"><div class="section-title"><h3>🆕 새로 뜬 실거래</h3><span>최근 7일 사이 신고</span></div><div class="re-news">${nts.map(({c,t})=>{const tg=targetOf(c);return `<div class="re-news-item"><div class="re-news-head"><span class="re-kind">실거래</span><span class="re-news-date">계약 ${dayText(t.d)}</span>${t.dg?`<span class="re-tag">직거래</span>`:""}</div><button class="re-link" data-re-open="${esc(c.id)}">${esc(c.name)}${t.n&&t.i?` · ${esc(t.n)}`:""}</button><b>${eok(t.p)} <small>${Math.round(t.a*10)/10}㎡${t.f!=null?` · ${t.f}층`:""}</small></b>${tg?`<div class="re-news-nums">${t.p<=tg?"관심 매수가 이하예요":`관심 매수가보다 ${eok(t.p-tg)} 높음`}</div>`:""}</div>`}).join("")}</div></section>`:""}
   ${subs.length?`<section class="section"><div class="section-title"><h3>🎟 청약 · 줍줍</h3><span>최근 2주 신문에서</span></div><div class="re-news">${subs.map(i=>`<div class="re-news-item"><div class="re-news-head"><span class="re-kind">청약·줍줍</span><span class="re-news-date">${dayText(i.date)}</span>${byBadge(i.by)}</div><b>${esc(i.title)}</b><p>${esc(i.body)}</p><div class="re-src"><a href="${esc(safeUrl(i.source_url))}" target="_blank" rel="noopener">${esc(i.source_name||host(i.source_url))} ↗</a></div></div>`).join("")}</div></section>`:""}
   ${fresh.length?`<section class="section"><div class="section-title"><h3>🗞 단지 새 소식</h3><span>최근 3일</span></div><div class="re-news">${fresh.map(n=>newsItem(n,true)).join("")}</div></section>`:""}
   <section class="card re-panel"><div class="re-eyebrow">지금 시장 · ${esc(d.asOf)} 기준</div><ul class="re-bullets">${d.market.map(x=>`<li>${esc(x)}</li>`).join("")}</ul></section>
   ${fold("budget","💰 내 예산",`<ul class="re-bullets">${d.budget.lines.map(x=>`<li>${esc(x)}</li>`).join("")}</ul>${d.plan?`<p class="re-note"><button class="re-link" data-re-view="plan" data-re-foldopen="costs">추가로 드는 돈 · 자금 계산기 보기</button></p>`:""}`)}
   ${stars.length?`<section class="section"><div class="section-title"><h3>⭐ 별표한 단지</h3><span>${stars.length}곳</span></div><div class="re-grid">${stars.map(card).join("")}</div></section>`:""}
+  ${wait.length?fold("wait",`📉 조정 오면 살 단지 <small>${wait.length}곳</small>`,`<p class="re-note" style="margin-top:0">지금은 예산(약 ${eok(wait[0].max)})을 넘지만 값이 내려오면 살 수 있는 단지예요. 위에서부터 덜 빠져도 되는 순서예요. 살 수 있는 값 아래로 거래가 뜨면 맨 위 "🔔 조정 신호"에 떠요.</p><div class="re-wait">${wait.map(waitRow).join("")}</div><p class="re-note">살 수 있는 값 = 관심 매수가와 예산선 중 낮은 쪽. 예산선은 계획 → 자금 계산기에 저장한 값으로 계산해요.</p>`,true):""}
   <section class="section"><div class="section-title"><h3>🎯 기회 가격에 가까운 단지</h3><span>최근 실거래 − 관심 매수가</span></div><div class="re-grid">${near.map(card).join("")}</div></section>
   <section class="section"><div class="section-title"><h3>🗓 다가오는 일정</h3><button class="re-link" data-re-view="plan" data-re-foldopen="market">전체 보기</button></div><div class="re-tl">${next.map(tlItem).join("")}</div></section>`;
 }
@@ -264,13 +289,14 @@ function sorted(cs){
   return [...cs].sort((a,b)=>(by[RE.sort]||by.rank)(a,b)||order.indexOf(statusOf(a))-order.indexOf(statusOf(b))||a.name.localeCompare(b.name,"ko"));
 }
 function viewList(){
-  const shown=sorted(complexes().filter(c=>(RE.region==="all"||c.region===RE.region)&&(RE.kind==="all"||c.kind===RE.kind)&&(RE.status==="all"||statusOf(c)===RE.status||(RE.status==="holdout"&&["hold","out"].includes(statusOf(c)))||(RE.status==="agent"&&c.agent))&&(!RE.starOnly||ustate(c.id).star)));
+  const waitIds=RE.status==="wait"?new Set(waitList().map(w=>w.c.id)):null;
+  const shown=sorted(complexes().filter(c=>(!waitIds||waitIds.has(c.id))&&(RE.region==="all"||c.region===RE.region)&&(RE.kind==="all"||c.kind===RE.kind)&&(RE.status==="all"||RE.status==="wait"||statusOf(c)===RE.status||(RE.status==="holdout"&&["hold","out"].includes(statusOf(c)))||(RE.status==="agent"&&c.agent))&&(!RE.starOnly||ustate(c.id).star)));
   const chips=(key,opts)=>`<div class="re-chips" role="group">${opts.map(([v,l])=>`<button data-re-filter="${key}" data-re-value="${v}" class="${RE[key]===v?"on":""}" aria-pressed="${RE[key]===v}">${l}</button>`).join("")}</div>`;
   return `<section class="card re-controls">
     <label class="re-sort">정렬 <select id="re-sort">${SORTS.map(([v,l])=>`<option value="${v}" ${RE.sort===v?"selected":""}>${l}</option>`).join("")}</select></label>
     ${chips("region",[["all","전체 지역"],["서울","서울"],["경기","경기"]])}
     ${chips("kind",[["all","전체 유형"],["apt","아파트"],["jusang","주상복합"],["presale","분양권"]])}
-    ${chips("status",[["all","전체 상태"],["top","추천"],["watch","관심"],["dip","조정 시 매수"],["holdout","보류·제외"],["agent","피클 추가"]])}
+    ${chips("status",[["all","전체 상태"],["top","추천"],["watch","관심"],["dip","조정 시 매수"],["wait","조정 대기"],["holdout","보류·제외"],["agent","피클 추가"]])}
     <div class="re-chips"><button data-re-star class="${RE.starOnly?"on":""}" aria-pressed="${RE.starOnly}">⭐ 별표만</button></div>
   </section>
   <div class="section-title"><h3>단지 ${shown.length}곳</h3><span>가격은 국토부 실거래 최근 3개월 중앙값</span></div>
@@ -331,7 +357,7 @@ function viewDetail(){
   ${tradesCard(c,trades)}
   <section class="card re-panel re-target"><div class="re-eyebrow">🎯 기회 가격</div>
     ${ro?(t?`<div class="re-bigprice">${eok(t)} <small>관심 매수가</small></div>`:""):`<form id="re-targetform" class="re-targetform"><label>관심 매수가 <input type="number" step="0.05" min="0" max="99" name="target" value="${t??""}" inputmode="decimal"> 억</label><button type="submit">저장</button></form>`}
-    <p class="re-target-note">${g==null?"관심 매수가를 정하면 최근 실거래와의 차이를 보여줘요.":g<=0?`최근 실거래가 관심 매수가 이하예요 (${eok(-g)} 아래).`:`최근 실거래가 관심 매수가보다 ${eok(g)} 높아요.`}${!ro&&c.target&&t===c.target?" 제안값이라 직접 고칠 수 있어요.":""}${ask!=null&&t?` 내가 본 최저 호가 ${eok(ask)}는 관심 매수가${ask<=t?" 이하예요.":`보다 ${eok(ask-t)} 높아요.`}`:""}</p>
+    <p class="re-target-note">${g==null?"관심 매수가를 정하면 최근 실거래와의 차이를 보여줘요.":g<=0?`최근 실거래가 관심 매수가 이하예요 (${eok(-g)} 아래).`:`최근 실거래가 관심 매수가보다 ${eok(g)} 높아요.`}${!ro&&c.target&&t===c.target?" 제안값이라 직접 고칠 수 있어요.":""}${ask!=null&&t?` 내가 본 최저 호가 ${eok(ask)}는 관심 매수가${ask<=t?" 이하예요.":`보다 ${eok(ask-t)} 높아요.`}`:""}${(()=>{const w=waitList().find(x=>x.c.id===c.id);return w&&w.drop>0?` 살 수 있는 값(${eok(w.line)})까지 ${eok(w.drop)}(${Math.round(w.pct*100)}%) 내려야 해요.`:""})()}</p>
   </section>
   ${ro?"":listingsCard(c)}
   <section class="card re-panel"><div class="re-eyebrow">🚇 통근</div>

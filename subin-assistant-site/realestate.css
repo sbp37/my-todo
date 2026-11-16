@@ -228,3 +228,17 @@ body[data-tab="realestate"]{--bg:#f2f4f1}
 .re-trades tr.gone td:not(:last-child){text-decoration:line-through;color:var(--muted)}
 .re-news-item b small{font-size:var(--fs-sm);font-weight:500;color:var(--muted)}
 .re-facts dd .re-gap{display:inline-block;font-size:var(--fs-sm)}
+
+/* 조정 대기 · 조정 신호 */
+#re-root details>summary small{font-size:var(--fs-sm);font-weight:500;color:var(--muted);margin-left:4px}
+.re-wait{display:grid;gap:8px}
+.re-wait-row{display:block;width:100%;text-align:left;padding:11px 13px;border:1px solid var(--line);border-radius:var(--r-md);background:var(--paper);font:inherit;color:inherit}
+.re-wait-row:hover{border-color:var(--re-line)}
+.re-wait-top{display:flex;align-items:center;gap:8px}
+.re-wait-top b{flex:1;min-width:0;font-size:var(--fs-title);word-break:keep-all}
+.re-wait-top>span:not(.re-pill){font-size:var(--fs-sm);color:var(--muted)}
+.re-wait-nums{display:flex;flex-wrap:wrap;gap:4px 14px;margin-top:6px;font-size:var(--fs-md);color:var(--ink-2);font-variant-numeric:tabular-nums}
+.re-wait-need{font-weight:700;color:var(--ink)}
+.re-wait-bar{position:relative;height:8px;margin-top:8px;background:var(--line-2);border-radius:4px;overflow:hidden}
+.re-wait-bar i{position:absolute;inset:0 auto 0 0;background:var(--re);border-radius:4px}
+.re-signal{border-color:var(--re-line);background:var(--re-bg)}
