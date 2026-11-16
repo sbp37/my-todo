@@ -278,9 +278,10 @@ body[data-tab="realestate"]{--bg:#f2f4f1}
 .re-plan img{display:block;width:100%;height:auto;max-height:260px;object-fit:contain;border-radius:8px;background:#fbfaf7}
 .re-plan-label{font-size:var(--fs-sm);font-weight:700;color:var(--ink)}
 .re-plan-warn{font-size:var(--fs-xs);font-weight:600;color:var(--red)}
-dialog.re-modal{max-width:96vw;max-height:94vh;padding:0;border:0;border-radius:18px;background:#fffefb;box-shadow:0 24px 70px rgba(30,24,20,.34)}
+dialog.re-modal{width:min(1080px,96vw);max-width:96vw;max-height:94vh;padding:0;border:0;border-radius:18px;background:#fffefb;box-shadow:0 24px 70px rgba(30,24,20,.34);overflow:visible}
 dialog.re-modal::backdrop{background:rgba(30,24,20,.62)}
-dialog.re-modal form{position:relative;margin:0;padding:10px}
-dialog.re-modal img{display:block;max-width:92vw;max-height:78vh;width:auto;height:auto;border-radius:10px;background:#fff}
-dialog.re-modal .re-modal-cap{margin:8px 4px 2px;font-size:var(--fs-sm);font-weight:600;color:var(--ink-2)}
+dialog.re-modal form{display:flex;flex-direction:column;align-items:stretch;margin:0;padding:12px 12px 6px}
+dialog.re-modal img{display:block;width:100%;height:auto;max-height:76vh;object-fit:contain;border-radius:10px;background:#fff}
+dialog.re-modal .re-modal-cap{margin:8px 2px 4px;font-size:var(--fs-sm);font-weight:600;color:var(--ink-2);text-align:center}
 dialog.re-modal .re-modal-close{position:absolute;top:-14px;right:-14px;width:34px;height:34px;border-radius:50%;border:1px solid var(--line);background:#fffefb;color:var(--ink);font-size:15px;line-height:1;cursor:pointer;box-shadow:0 3px 12px rgba(30,24,20,.2)}
+@media(max-width:520px){dialog.re-modal{width:96vw}dialog.re-modal .re-modal-close{top:6px;right:6px;z-index:2}}
