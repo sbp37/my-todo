@@ -133,6 +133,19 @@ Vercel과 GitHub는 자동 배포 링크가 설정되어 있지 않을 수 있�
 - 맥 폴더 이름은 한글이 NFD로 들어오므로 이름·코드는 NFC로 맞춰 비교한다.
 - `.ai` 원본과 썸네일은 GitHub에 커밋하지 않는다.
 
+## 🏠 부동산 탭
+
+- 탭: 사이트 상단 `🏠 부동산`. 요약 / 단지(정렬·필터) / 단지 상세 / 일정 / 분양권·기준.
+- 코드: `subin-assistant-site/realestate.js`, `realestate.css` (기존 파일은 탭 버튼·로드 태그·`render()` 분기만 수정). `realestate.js`는 `app-render.js`보다 먼저 로드한다.
+- 버튼 속성은 `data-re-*`만 쓴다. 상태 표시 클래스는 `s-top`처럼 `s-`를 붙인다(`style.css`의 `.top`은 상단 헤더라 겹치면 깨진다).
+- API: `GET ?resource=realestate` → `{seed, user}`, `POST action=re_patch {id, patch}` (patch: `memo`, `target`(억), `star`, `status`, `links{naver,hogang,plan,road}`). 로직은 `supabase/functions/assistant-api/realestate.ts`.
+- 조사 내용(단지·시장 요약·일정)은 `realestate_seed.ts`의 `SEED`에 있고 **배포본에만 둔다**. 예산·관심 단지가 드러나는 개인 조사 내용이라 저장소에 커밋하지 않는다(`index.ts`와 같은 취급). 내용을 고치려면 배포본을 내려받아 `SEED`를 고쳐 다시 배포한다.
+- `GET ?resource=re_version`은 인증 없이 `{version, complexes, sha256}`만 돌려준다. 배포 뒤 `sha256`이 로컬 `JSON.stringify(SEED)`의 해시와 같은지로 내용이 그대로 올라갔는지 확인한다.
+- 내가 고친 값(메모·관심 매수가·별표·링크)은 비공개 Storage 버킷 `re-data`의 `user.json`에 저장한다(버킷은 첫 저장 때 만든다). 조사 내용을 다시 배포해도 지워지지 않는다.
+- 단지 필드: `cm`은 `[역삼 최소시간, 환승, 역삼 최소환승, 환승, 잠실 최소시간, 환승, 잠실 최소환승, 환승]`(없으면 null), 가격은 억 단위(`p24` 2024년 7~11월, `p26` 최근 실거래, `peak` 2021년 고점, `target` 관심 매수가 제안값), `status`는 `top|watch|dip|hold|out|presale`.
+- 평면도·사진은 저작권 때문에 사이트에 넣지 않고 링크로 연다(네이버부동산·호갱노노·평면도 검색·카카오맵). 단지 페이지 주소를 "링크 고치기"에 넣으면 그 주소로 바로 열린다.
+- 네이버부동산·호갱노노·당근부동산은 자동 수집을 막아 두었으므로 긁어 오지 않는다. 실거래 자동 갱신은 국토부 공식 API(공공데이터포털)로 만든다(2단계, Supabase secret `DATA_GO_KR_KEY`).
+
 ## 캘린더
 
 Google Calendar는 별도 자동 동기화 흐름이 `public.calendar_events`를 갱신한다. Google Calendar 원본을 GitHub에 커밋하지 않는다.
