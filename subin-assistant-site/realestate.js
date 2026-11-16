@@ -215,7 +215,7 @@ function budgetOf(c){
 function budgetBadge(c){
   const b=budgetOf(c);if(!b)return"";
   const title=`${b.by} ${eok(b.price)} 기준 · 내 예산선 ${eok(b.max)}`;
-  return b.tier==="ok"?`<span class="re-gap hit" title="${title}">가능</span>`:b.tier==="tight"?`<span class="re-gap tight" title="${title}">빠듯함 · 여유 ${eok(b.room)}</span>`:`<span class="re-gap over" title="${title}">초과 ${eok(-b.room)}</span>`;
+  return b.tier==="ok"?`<span class="re-gap hit" title="${title}">가능</span>`:b.tier==="tight"?`<span class="re-gap tight" title="${title}">빠듯함 · ${b.room>0?`여유 ${eok(b.room)}`:"예산선과 같음"}</span>`:`<span class="re-gap over" title="${title}">초과 ${eok(-b.room)}</span>`;
 }
 
 function waitRow(w){
